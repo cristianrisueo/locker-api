@@ -1,4 +1,4 @@
-# Rutas de la API de entregas: reservar y depositar.
+# Rutas de la API de entregas: reservar, depositar y consultar.
 import uuid
 from typing import Annotated
 
@@ -68,3 +68,20 @@ async def deposit(
     # Una clave carrier siempre lleva name: lo exige la validación de la configuración al arrancar
     assert principal.name is not None
     return await service.deposit(principal.name, delivery_id)
+
+
+@router.get(
+    "/{delivery_id}",
+    summary="Consultar una entrega",
+    responses={404: {"description": "La entrega no existe o es de otro transportista"}},
+)
+async def get_delivery(
+    delivery_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require_role("carrier"))],
+    service: DeliveryServiceDep,
+) -> Delivery:
+    """Devuelve la entrega con su estado actual. Solo la ve el transportista dueño."""
+
+    # Una clave carrier siempre lleva name: lo exige la validación de la configuración al arrancar
+    assert principal.name is not None
+    return await service.get(principal.name, delivery_id)

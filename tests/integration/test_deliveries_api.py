@@ -1,13 +1,11 @@
 # Consultar una entrega por la API: solo el transportista dueño la ve.
 import uuid
 
-import pytest
 from httpx import AsyncClient
 
 from tests.integration.conftest import CrearEdificio, Reservar
 
 
-@pytest.mark.xfail(strict=True, reason="consultar todavía no existe")
 async def test_consultar_la_entrega_propia_devuelve_200(
     client: AsyncClient, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -27,7 +25,6 @@ async def test_consultar_la_entrega_propia_devuelve_200(
     assert respuesta.json()["status"] == "DEPOSITED"
 
 
-@pytest.mark.xfail(strict=True, reason="consultar todavía no existe")
 async def test_consultar_una_entrega_ajena_devuelve_404(
     client: AsyncClient,
     crear_edificio: CrearEdificio,
@@ -48,7 +45,6 @@ async def test_consultar_una_entrega_ajena_devuelve_404(
     assert respuesta.json() == {"code": "NOT_FOUND", "detail": f"Entrega {reserva['id']} no encontrada"}
 
 
-@pytest.mark.xfail(strict=True, reason="consultar todavía no existe")
 async def test_consultar_una_entrega_inexistente_devuelve_404(
     client: AsyncClient, cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -61,7 +57,6 @@ async def test_consultar_una_entrega_inexistente_devuelve_404(
     assert respuesta.json() == {"code": "NOT_FOUND", "detail": f"Entrega {entrega} no encontrada"}
 
 
-@pytest.mark.xfail(strict=True, reason="consultar todavía no existe")
 async def test_el_operador_no_puede_consultar_entregas(
     client: AsyncClient,
     crear_edificio: CrearEdificio,

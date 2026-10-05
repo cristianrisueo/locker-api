@@ -1,4 +1,5 @@
-# Capa de servicio de entregas: reservar una taquilla para un paquete, con su clave de idempotencia, y depositarlo.
+# Capa de servicio de entregas: reservar una taquilla para un paquete (con su clave de idempotencia), depositarlo
+# y consultarlo.
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,3 +105,13 @@ class DeliveryService:
             if current.status == "PICKED_UP":
                 raise InvalidStateError
             return current
+
+    async def get(self, carrier: str, delivery_id: uuid.UUID) -> Delivery:
+        """
+        El transportista consulta su entrega. Es una lectura simple: no necesita transacción (§7.0).
+        No existe, o es de otro transportista -> 404, sin revelar que existe
+        """
+        delivery = await self._deliveries.get(delivery_id, carrier)
+        if delivery is None:
+            raise DeliveryNotFoundError(delivery_id)
+        return delivery
