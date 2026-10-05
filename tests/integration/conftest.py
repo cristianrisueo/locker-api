@@ -13,16 +13,22 @@ from typing import Protocol
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.community.postgres import PostgresContainer
 
-from locker.core.config import DatabaseSettings
+from locker.core.config import ApiKey, DatabaseSettings, Settings, get_settings
 from locker.core.database import Base, create_engine, create_session_factory, get_session
 from locker.main import app  # importar la app registra todos los modelos en Base.metadata
 
 # Raíz del repositorio, donde está alembic.ini
 ROOT = Path(__file__).resolve().parents[2]
+
+# Claves de API de los tests. Solo existen aquí: ni el CI ni `make test` tienen .env, así que los tests
+# nunca dependen de la API_KEYS del entorno
+CLAVE_OPERADOR = "test-operator-key-000000000"
+CLAVE_SEUR = "test-seur-key-0000000000000"
 
 
 class AlembicRunner(Protocol):
@@ -83,6 +89,34 @@ async def session_factory(database_url: str) -> AsyncIterator[async_sessionmaker
     await engine.dispose()
 
 
+@pytest.fixture(scope="session")
+def settings(database_url: str) -> Settings:
+    """
+    Configuración completa de la API para los tests, con claves conocidas. Se construye a mano
+    (sin .env) y sustituye a get_settings en la fixture client
+    """
+    return Settings(
+        database_url=database_url,
+        api_keys=[
+            ApiKey(key=SecretStr(CLAVE_OPERADOR), role="operator"),
+            ApiKey(key=SecretStr(CLAVE_SEUR), role="carrier", name="SEUR"),
+        ],
+        _env_file=None,
+    )
+
+
+@pytest.fixture
+def cabeceras_operador() -> dict[str, str]:
+    """Cabeceras de una petición del operador."""
+    return {"X-API-Key": CLAVE_OPERADOR}
+
+
+@pytest.fixture
+def cabeceras_transportista() -> dict[str, str]:
+    """Cabeceras de una petición del transportista SEUR."""
+    return {"X-API-Key": CLAVE_SEUR}
+
+
 @pytest.fixture(autouse=True)
 async def limpiar_tablas(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[None]:
     """
@@ -115,10 +149,11 @@ async def session(
 
 
 @pytest.fixture
-async def client(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncClient]:
+async def client(session_factory: async_sessionmaker[AsyncSession], settings: Settings) -> AsyncIterator[AsyncClient]:
     """
     Cliente HTTP contra la app en el mismo proceso. Cada petición recibe una sesión nueva, como en
     producción: si compartiera la del test, el identity map podría ocultar lo que de verdad hay en la BD.
+    La configuración es la de la fixture settings, no la del entorno (§7.0).
     """
 
     async def session_por_peticion() -> AsyncIterator[AsyncSession]:
@@ -126,9 +161,11 @@ async def client(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIter
             yield s
 
     app.dependency_overrides[get_session] = session_por_peticion
+    app.dependency_overrides[get_settings] = lambda: settings
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
     app.dependency_overrides.pop(get_session)
+    app.dependency_overrides.pop(get_settings)
 
 
 @pytest.fixture
