@@ -1,4 +1,4 @@
-# Capa de servicio de edificios: abre la transacción y usa el repositorio.
+# Capa de servicio de edificios: Crea edificios
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.buildings.repository import BuildingRepository

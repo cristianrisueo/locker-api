@@ -15,6 +15,7 @@ class BuildingModel(Base):
     __tablename__ = "buildings"
 
     # Columnas de la tabla.
-    # UUID v7 generado en la aplicación al crear la fila: lleva la hora dentro, así que no hace falta created_at
+    # id: UUID v7 generado en la aplicación al crear la fila: lleva la hora dentro, así que no hace falta created_at
+    # name: String de hasta 100 caracteres, NOT NULL
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
-    name: Mapped[str] = mapped_column(String(100))  # String de hasta 100 caracteres, NOT NULL. Sin unicidad (A13)
+    name: Mapped[str] = mapped_column(String(100))

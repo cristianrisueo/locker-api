@@ -10,9 +10,8 @@ from locker.lockers.schemas import SIZES, Capacity, LockersCreated, LockersIn, S
 
 
 def make_label(size: Size, number: int) -> str:
-    """Etiqueta de una taquilla: la talla y el número con dos cifras como mínimo (M-03, M-100)."""
-    # :02d rellena con ceros a la izquierda hasta dos cifras; con más cifras no recorta nada
-    return f"{size}-{number:02d}"
+    """Función auxiliar para generar la etiqueta de una taquilla: (M-03, M-100)."""
+    return f"{size}-{number:02d}"  # :02d rellena con ceros a la izquierda hasta dos cifras; con más cifras no recorta nada
 
 
 class LockerService:
@@ -29,10 +28,10 @@ class LockerService:
         """
         Da de alta taquillas de una talla con etiquetas consecutivas. Si el edificio no existe, 404.
         En una transacción, con la fila del edificio bloqueada: dos altas simultáneas en el mismo
-        edificio se ponen en fila, así que la segunda cuenta también las taquillas que acaba de crear la primera
+        edificio se ponen en fila, así que la segunda petición cuenta también las taquillas que acaba de crear la primera
         """
 
-        # La transacción es lo primero del caso de uso, antes de cualquier consulta
+        # Ejecuta dentro de una transacción: si algo falla, se hace rollback y no queda nada insertado
         async with self._session.begin():
             # 1. Bloquea el edificio: otra alta en el mismo edificio espera aquí hasta que esta confirme
             if not await self._buildings.lock(building_id):
@@ -41,7 +40,7 @@ class LockerService:
             # 2. Cuenta las taquillas que ya hay de esta talla: la numeración sigue a partir de ahí
             existing = await self._lockers.count(building_id, data.size)
 
-            # 3. Inserta las nuevas, numeradas desde existing + 1
+            # 3. Crea las etiquetas e inserta las nuevas taquillas, numeradas desde existing + 1
             labels = [make_label(data.size, existing + n) for n in range(1, data.quantity + 1)]
             lockers = await self._lockers.add_many(building_id, data.size, labels)
 
@@ -50,7 +49,7 @@ class LockerService:
     async def capacity(self, building_id: uuid.UUID) -> Capacity:
         """
         Capacidad del edificio por talla, en orden S, M, L. Si el edificio no existe, 404.
-        Es una lectura simple: no abre transacción con begin()
+        Es una lectura simple: no abre transacción
         """
 
         # Sin esta comprobación, un edificio inexistente parecería un edificio sin taquillas (sizes vacío)

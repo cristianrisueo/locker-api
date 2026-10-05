@@ -13,7 +13,7 @@ type LockerStatus = Literal["FREE", "BUSY"]
 
 
 class LockersIn(BaseModel):
-    """Datos para dar de alta taquillas de una talla en un edificio."""
+    """Datos para dar de alta taquillas de una talla en un edificio. La etiqueta y estatus se generan automáticamente."""
 
     size: Size = Field(description="Talla de las taquillas", examples=["M"])
     quantity: int = Field(default=1, ge=1, le=100, description="Cuántas taquillas se dan de alta", examples=[3])
@@ -29,13 +29,13 @@ class Locker(BaseModel):
 
 
 class LockersCreated(BaseModel):
-    """Respuesta del alta: las taquillas creadas, en orden de etiqueta."""
+    """Respuesta del alta de taquillas: las taquillas creadas, en orden de etiqueta."""
 
     lockers: list[Locker]
 
 
 class SizeCapacity(BaseModel):
-    """Capacidad de una talla: cuántas taquillas hay y cuántas están libres."""
+    """Taquillas totales de una talla y cuántas están libres."""
 
     size: Size
     total: int
