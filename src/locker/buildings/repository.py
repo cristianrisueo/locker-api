@@ -1,4 +1,5 @@
 # Repositorio de edificios: define la interfaz y su implementación sobre PostgreSQL.
+import uuid
 from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,9 @@ class BuildingRepository(Protocol):
 
     # Añade un edificio nuevo y lo devuelve con su id
     async def add(self, data: BuildingIn) -> Building: ...
+
+    # Bloquea la fila del edificio hasta que acabe la transacción. Devuelve False si no existe
+    async def lock(self, building_id: uuid.UUID) -> bool: ...
 
 
 class SqlBuildingRepository:
@@ -34,3 +38,10 @@ class SqlBuildingRepository:
 
         # Convierte el modelo de SQLAlchemy a un schema de Pydantic para devolverlo
         return Building.model_validate(model, from_attributes=True)
+
+    async def lock(self, building_id: uuid.UUID) -> bool:
+        """
+        SELECT ... FOR UPDATE: bloquea la fila del edificio hasta el final de la transacción.
+        Otra transacción que quiera bloquearla espera a que esta termine. Devuelve False si no existe.
+        """
+        raise NotImplementedError
