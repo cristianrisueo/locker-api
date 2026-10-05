@@ -2,6 +2,7 @@
 # Dos clases: DatabaseSettings (lo único que necesitan Alembic y los tests de base de datos) y Settings (todo lo demás).
 from functools import lru_cache
 
+from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,14 @@ class DatabaseSettings(BaseSettings):
     sql_echo: bool = False
 
 
+class ApiKey(BaseModel):
+    """Una entrada de API_KEYS: la clave, el rol de quien la usa y, si es transportista, su nombre."""
+
+    key: SecretStr
+    role: str
+    name: str | None = None
+
+
 class Settings(DatabaseSettings):
     """
     Configuración completa de la API (y, más adelante, del worker).
@@ -29,6 +38,8 @@ class Settings(DatabaseSettings):
 
     # Nivel mínimo de los logs: DEBUG, INFO, WARNING, ERROR o CRITICAL
     log_level: str = "INFO"
+
+    api_keys: list[ApiKey] = []
 
 
 @lru_cache
