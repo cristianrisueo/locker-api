@@ -24,3 +24,4 @@ class Building(BaseModel):
 
     id: uuid.UUID
     name: str
+    country: str

@@ -26,7 +26,7 @@ async def test_operador_crea_edificio_con_el_nombre_recortado(
 
     assert respuesta.status_code == 201
     cuerpo = respuesta.json()
-    assert cuerpo == {"id": cuerpo["id"], "name": "Edificio Sol"}
+    assert cuerpo == {"id": cuerpo["id"], "name": "Edificio Sol", "country": "ES"}
     assert uuid.UUID(cuerpo["id"]).version == 7
 
     filas = (await session.execute(text("SELECT id, name FROM buildings"))).all()
@@ -45,7 +45,6 @@ async def test_nombre_vacio_devuelve_422(
     assert await session.scalar(text("SELECT count(*) FROM buildings")) == 0
 
 
-@pytest.mark.xfail(strict=True, reason="la respuesta del edificio todavía no incluye country")
 async def test_country_es_opcional_y_por_defecto_es(
     client: AsyncClient, session: AsyncSession, cabeceras_operador: dict[str, str]
 ) -> None:
