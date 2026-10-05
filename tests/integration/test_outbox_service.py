@@ -154,7 +154,6 @@ async def test_cinco_fallos_seguidos_dejan_el_evento_muerto(
     assert await procesar() is False
 
 
-@pytest.mark.xfail(strict=True, reason="F5-06: falta el estado muerto y el sql en el readme")
 async def test_un_evento_muerto_se_reactiva_con_el_update_documentado(
     session: AsyncSession, procesar: Procesar, depositar: Depositar, notificador: NotificadorFalso
 ) -> None:

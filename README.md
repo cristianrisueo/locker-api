@@ -216,6 +216,12 @@ Taquilla:  FREE ──reservar──▶ BUSY ──recoger──▶ FREE
 
 **Outbox** (`outbox/`, por ahora parcial). `events.py` define el tipo `delivery.deposited` y su contenido, que es solo `{"delivery_id": "..."}`: ni el código ni los datos del residente. `repository.py` solo inserta. Cada evento se crea con `attempts = 0` y `next_attempt_at = now()`. El worker que los envía llega en la fase siguiente.
 
+**Eventos muertos.** Un evento que agota sus intentos de envío (`OUTBOX_MAX_ATTEMPTS`) se queda en `outbox_events` con `next_attempt_at` nulo: no avisa a nadie y no se vuelve a tomar (limitación aceptada A4). Cuando se haya arreglado la causa, se reactivan todos con este `UPDATE` (por ejemplo, desde `make psql`), que les devuelve los intentos y los deja vencidos para la siguiente pasada:
+
+```sql
+UPDATE outbox_events SET attempts = 0, next_attempt_at = now() WHERE next_attempt_at IS NULL;
+```
+
 **Tablas.** `buildings` (`id`, `name`, `country`), `lockers` (`id`, `building_id`, `label`, `size`, `status`), `deliveries` (`id`, `locker_id`, `carrier`, `tracking_ref`, `recipient`, `status`, `deposited_at`, `picked_up_at`), `idempotency_keys` (`carrier`, `key`, `request_hash`, `response_body` en JSONB) y `outbox_events` (`id`, que es el `event_id`, `type`, `payload` en JSONB, `attempts` y `next_attempt_at`, donde `NULL` significa evento muerto; sin índices, porque los eventos enviados se borrarán). Llevan `CHECK` sobre las tallas, los estados y el formato del país, un índice **parcial** `ix_lockers_free_by_size` sobre `(building_id, size)` que solo contiene las taquillas libres, y dos índices **únicos parciales** sobre las entregas activas (`PENDING` o `DEPOSITED`): `uq_deliveries_active_locker` (una taquilla, una entrega activa) y `uq_deliveries_active_package` (un paquete, una entrega activa). Una entrega recogida no cuenta, así que la taquilla y la referencia se pueden volver a usar. Los identificadores son UUID v7 generados por la aplicación.
 
 **Migración con datos.** `country` se añadió a `buildings` cuando ya había edificios, con el patrón expand → backfill → contract en una sola migración: se añade la columna admitiendo `NULL` (expand), se rellena con `UPDATE buildings SET country = 'ES'` (backfill) y después se exige con `NOT NULL` y `ck_buildings_country_format` (contract). Añadirla directamente como `NOT NULL` fallaría con los edificios existentes. El `downgrade` quita el `CHECK` y la columna, y conserva los edificios.
