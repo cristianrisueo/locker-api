@@ -176,3 +176,28 @@ async def test_un_evento_muerto_se_reactiva_con_el_update_documentado(
     assert [aviso.delivery_id for aviso in notificador.recibidas] == [entrega]
     assert await eventos(session) == []
     assert normalizar(REACTIVAR) in normalizar((ROOT / "README.md").read_text())
+
+
+async def test_un_aviso_que_falla_tras_enviarse_se_reenvia_con_el_mismo_event_id(
+    session: AsyncSession, procesar: Procesar, depositar: Depositar, notificador: NotificadorFalso
+) -> None:
+    """
+    «[F5-08]» Entrega «al menos una vez»: el aviso sale, pero el notificador falla después, así que cuenta como
+    fallo y el evento se queda. En la siguiente pasada se envía otra vez, igual y con el mismo event_id: con él, el
+    receptor puede reconocer el repetido e ignorarlo. Después, el evento se borra.
+    """
+    await depositar()
+    [evento] = await eventos(session)
+    notificador.fallar = "despues"
+
+    assert await procesar() is True
+    [fila] = await eventos(session)
+    assert fila["attempts"] == 1
+
+    notificador.fallar = None
+    assert await procesar() is True
+
+    primero, segundo = notificador.recibidas
+    assert primero.event_id == evento["id"]
+    assert segundo == primero
+    assert await eventos(session) == []
