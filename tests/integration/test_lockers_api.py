@@ -7,13 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
-async def crear_edificio(client: AsyncClient, cabeceras: dict[str, str]) -> str:
-    """Crea un edificio por la API y devuelve su id."""
-    respuesta = await client.post("/v1/buildings", json={"name": "Edificio Sol"}, headers=cabeceras)
-    assert respuesta.status_code == 201
-    id_edificio: str = respuesta.json()["id"]
-    return id_edificio
+from tests.integration.conftest import CrearEdificio
 
 
 async def dar_de_alta(client: AsyncClient, cabeceras: dict[str, str], edificio: str, cuerpo: dict[str, Any]) -> list[str]:
@@ -28,20 +22,20 @@ async def dar_de_alta(client: AsyncClient, cabeceras: dict[str, str], edificio: 
 
 
 async def test_alta_de_taquillas_genera_etiquetas_consecutivas_por_talla(
-    client: AsyncClient, session: AsyncSession, cabeceras_operador: dict[str, str]
+    client: AsyncClient, session: AsyncSession, crear_edificio: CrearEdificio, cabeceras_operador: dict[str, str]
 ) -> None:
     """
     «[F1-06]» Cada alta continúa la numeración de su talla en ese edificio: con quantity > 1 salen varias
     consecutivas, y cada talla lleva su propio contador (S-01 convive con M-01). quantity vale 1 por defecto.
     """
-    edificio = await crear_edificio(client, cabeceras_operador)
+    edificio = await crear_edificio({})
 
     assert await dar_de_alta(client, cabeceras_operador, edificio, {"size": "M", "quantity": 3}) == ["M-01", "M-02", "M-03"]
     assert await dar_de_alta(client, cabeceras_operador, edificio, {"size": "M", "quantity": 2}) == ["M-04", "M-05"]
     assert await dar_de_alta(client, cabeceras_operador, edificio, {"size": "S"}) == ["S-01"]
 
     # Otro edificio empieza su propia numeración
-    otro = await crear_edificio(client, cabeceras_operador)
+    otro = await crear_edificio({})
     assert await dar_de_alta(client, cabeceras_operador, otro, {"size": "M", "quantity": 1}) == ["M-01"]
 
     # Lo que devolvió la API es lo que quedó guardado
@@ -68,10 +62,14 @@ async def test_alta_de_taquillas_genera_etiquetas_consecutivas_por_talla(
     ids=["quantity-0", "quantity-101", "talla-invalida"],
 )
 async def test_quantity_fuera_de_rango_o_talla_invalida_devuelve_422(
-    client: AsyncClient, cabeceras_operador: dict[str, str], cuerpo: dict[str, Any], detail: str
+    client: AsyncClient,
+    crear_edificio: CrearEdificio,
+    cabeceras_operador: dict[str, str],
+    cuerpo: dict[str, Any],
+    detail: str,
 ) -> None:
     """«[F1-07]» quantity va de 1 a 100 y la talla es S, M o L: fuera de eso, 422 VALIDATION_ERROR."""
-    edificio = await crear_edificio(client, cabeceras_operador)
+    edificio = await crear_edificio({})
 
     respuesta = await client.post(f"/v1/buildings/{edificio}/lockers", json=cuerpo, headers=cabeceras_operador)
 

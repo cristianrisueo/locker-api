@@ -4,7 +4,7 @@ API de taquillas para paquetería: un transportista reserva una taquilla de un e
 
 Qué hace el sistema y cómo se construye está en [`docs/especificaciones.md`](docs/especificaciones.md); el orden de construcción, por fases, en [`docs/plan_fases.md`](docs/plan_fases.md).
 
-> **Estado: F1.** Sobre la base de F0 (errores, logs, identificador de petición, `/health`, contenedores con dos réplicas, tests y CI) hay claves de API con roles, alta de edificios, alta de taquillas con etiqueta generada y consulta de capacidad. Todavía no hay entregas.
+> **Estado: F2.** Sobre la base de F0 (errores, logs, identificador de petición, `/health`, contenedores con dos réplicas, tests y CI) hay claves de API con roles, alta de edificios, alta de taquillas con etiqueta generada, consulta de capacidad y **reserva de taquilla** segura bajo concurrencia, también entre réplicas. Todavía no hay `Idempotency-Key`, ni depositar, recoger o consultar una entrega.
 
 ## Stack
 
@@ -57,7 +57,7 @@ Cada operación de `/v1` exige la cabecera `X-API-Key`. Las claves y sus roles e
 | Rol        | Qué puede hacer                                         | `name`                                                   |
 | ---------- | ------------------------------------------------------- | -------------------------------------------------------- |
 | `operator` | Crear edificios, dar de alta taquillas, ver capacidad   | No hace falta                                            |
-| `carrier`  | Ver capacidad (y, en fases siguientes, reservar y depositar) | Obligatorio: es el nombre del transportista (`SEUR`) |
+| `carrier`  | Ver capacidad y reservar (en fases siguientes, también depositar) | Obligatorio: es el nombre del transportista (`SEUR`) |
 
 Al arrancar se valida la lista: no puede estar vacía, los roles son `operator` o `carrier`, cada `carrier` lleva `name` y las claves tienen al menos 16 caracteres y no se repiten. Si algo falla, la API no arranca y el error no muestra ninguna clave.
 
@@ -87,6 +87,16 @@ curl -s -X POST localhost:8000/v1/buildings/$EDIFICIO/lockers -H "$OPERADOR" -H 
 # Un transportista consulta la capacidad
 curl -s localhost:8000/v1/buildings/$EDIFICIO/capacity -H "X-API-Key: dev-seur-key-0000000000000"
 # {"building_id":"01a10b7b-629d-73d8-b02f-8994048149d7","sizes":[{"size":"M","total":3,"free":3}]}
+
+# SEUR reserva una taquilla M para su paquete ES123: el transportista sale de la clave, no del cuerpo
+curl -s -X POST localhost:8000/v1/deliveries -H "X-API-Key: dev-seur-key-0000000000000" \
+  -H 'Content-Type: application/json' \
+  -d "{\"building_id\": \"$EDIFICIO\", \"size\": \"M\", \"tracking_ref\": \"ES123\", \"recipient\": \"vecino@example.com\"}"
+# {"id":"...","status":"PENDING","building_id":"01a10b7b-...","locker_label":"M-01","size":"M","carrier":"SEUR",
+#  "tracking_ref":"ES123","recipient":"vecino@example.com","deposited_at":null,"picked_up_at":null}
+
+# Repetir la misma reserva: el paquete ya tiene una entrega activa
+# {"code":"DUPLICATE_PACKAGE","detail":"Este paquete ya tiene una reserva activa"}
 
 # Sin clave
 curl -s -X POST localhost:8000/v1/buildings -H 'Content-Type: application/json' -d '{"name": "Edificio Sol"}'
@@ -145,12 +155,21 @@ Cada dominio es un paquete de `src/locker/` con los mismos ficheros: `router.py`
 | `POST /v1/buildings`                         | operador                | Crea un edificio (`201 {"id", "name"}`). El nombre no tiene que ser único |
 | `POST /v1/buildings/{building_id}/lockers`   | operador                | Da de alta de 1 a 100 taquillas de una talla (`S`, `M` o `L`), libres     |
 | `GET /v1/buildings/{building_id}/capacity`   | operador, transportista | Total y libres por talla, en orden `S`, `M`, `L`                          |
+| `POST /v1/deliveries`                        | transportista           | Reserva una taquilla libre de la talla pedida y crea la entrega en `PENDING` (`201`) |
 
 **Etiquetas.** Cada talla lleva su propio contador por edificio: `S-01`, `M-01` y `M-02` conviven, y a partir de 100 salen tres cifras (`M-100`). Para que dos altas simultáneas no calculen la misma etiqueta, el alta bloquea la fila del edificio (`SELECT ... FOR UPDATE`) antes de contar, todo en la misma transacción: la segunda espera a la primera y sigue la numeración. Además, `uq_lockers_building_id_label` impide etiquetas repetidas en un edificio.
 
 **Capacidad.** Una sola consulta agrupada por talla, con `count(*)` para el total y `count(*) FILTER (WHERE status = 'FREE')` para las libres. Un edificio sin taquillas devuelve `"sizes": []`; uno que no existe, `404 NOT_FOUND`.
 
-**Tablas.** `buildings` (`id`, `name`) y `lockers` (`id`, `building_id`, `label`, `size`, `status`), con `CHECK` sobre la talla y el estado y un índice **parcial** `ix_lockers_free_by_size` sobre `(building_id, size)` que solo contiene las taquillas libres. Los identificadores son UUID v7 generados por la aplicación.
+**Reservar.** Cuerpo `{"building_id", "size", "tracking_ref", "recipient"}` (sin campos extra); el transportista es el de la clave de API. En una transacción, y en este orden:
+
+1. Si el edificio no existe, `404 NOT_FOUND`.
+2. **Asigna la taquilla en una sola sentencia**: un `UPDATE ... RETURNING` sobre un CTE que elige la taquilla libre más antigua de esa talla con `FOR UPDATE SKIP LOCKED`. Nunca un `SELECT` y luego un `UPDATE`: entre los dos, otra reserva podría quedarse con la misma taquilla. `SKIP LOCKED` hace que una reserva simultánea salte la taquilla que otra tiene bloqueada en vez de esperarla. Solo la talla exacta: si no queda ninguna libre, `409 NO_LOCKER_AVAILABLE`, aunque haya libres de otra talla.
+3. Crea la entrega. No se mira antes si el paquete ya tiene una reserva: lo impide el índice único parcial `uq_deliveries_active_package`, y el repositorio traduce su error (SQLSTATE `23505` y el nombre del índice) a `409 DUPLICATE_PACKAGE`. El error deshace la transacción entera, así que la taquilla vuelve a quedar libre.
+
+Como la taquilla se asigna antes de crear la entrega, un paquete duplicado sin taquillas libres recibe `NO_LOCKER_AVAILABLE` (limitación aceptada A10).
+
+**Tablas.** `buildings` (`id`, `name`), `lockers` (`id`, `building_id`, `label`, `size`, `status`) y `deliveries` (`id`, `locker_id`, `carrier`, `tracking_ref`, `recipient`, `status`, `deposited_at`, `picked_up_at`). Llevan `CHECK` sobre las tallas y los estados, un índice **parcial** `ix_lockers_free_by_size` sobre `(building_id, size)` que solo contiene las taquillas libres, y dos índices **únicos parciales** sobre las entregas activas (`PENDING` o `DEPOSITED`): `uq_deliveries_active_locker` (una taquilla, una entrega activa) y `uq_deliveries_active_package` (un paquete, una entrega activa). Una entrega recogida no cuenta, así que la taquilla y la referencia se pueden volver a usar. Los identificadores son UUID v7 generados por la aplicación.
 
 ## Docker
 
@@ -180,7 +199,7 @@ Tres niveles; cada comportamiento se prueba en el más bajo que caza su bug:
 - **Aislamiento**: al terminar cada test se vacían las tablas con `TRUNCATE ... RESTART IDENTITY CASCADE`.
 - **Una sesión por petición**, como en producción, sustituyendo `get_session` con `dependency_overrides`.
 - **Configuración propia**: los tests sustituyen `get_settings` con claves de prueba, así que no dependen del `.env` ni de `API_KEYS` del entorno.
-- **Concurrencia** con varias sesiones y `asyncio.gather` (por ejemplo, dos altas de taquillas a la vez), sin `sleep`.
+- **Concurrencia** con varias sesiones y `asyncio.gather` (dos altas de taquillas a la vez, 10 reservas para 5 taquillas), sin `sleep`. Antes de lanzarlas se abren las conexiones del pool: si no, las peticiones no llegan a solaparse y el test pasaría aunque faltase la protección. Entre procesos reales, un E2E reparte 10 reservas entre `api-1` y `api-2` con hilos.
 - **Migraciones**: un test comprueba que `alembic check` no ve diferencias y que todas las migraciones bajan y suben en una base de datos vacía.
 - **Sin dobles**: la base de datos caída se prueba con una URL inalcanzable.
 

@@ -6,6 +6,8 @@ from collections.abc import Iterator
 import httpx
 import pytest
 
+from locker.core.config import get_settings
+
 
 def leer_base_urls() -> list[str]:
     """
@@ -30,3 +32,30 @@ def client(base_url: str) -> Iterator[httpx.Client]:
     """Cliente HTTP síncrono contra una réplica: contra un sistema remoto no se gana nada con async."""
     with httpx.Client(base_url=base_url, timeout=5) as c:
         yield c
+
+
+@pytest.fixture
+def base_urls() -> list[str]:
+    """Todas las réplicas a la vez, para los tests que reparten peticiones entre ellas."""
+    return leer_base_urls()
+
+
+def clave_de(role: str) -> str:
+    """
+    La primera clave de API con ese rol, leída del .env: la misma configuración que reciben las réplicas.
+    Solo se usa para la cabecera; nunca se imprime
+    """
+    clave = next(entry.key for entry in get_settings().api_keys if entry.role == role)
+    return clave.get_secret_value()
+
+
+@pytest.fixture
+def cabeceras_operador() -> dict[str, str]:
+    """Cabeceras de una petición del operador."""
+    return {"X-API-Key": clave_de("operator")}
+
+
+@pytest.fixture
+def cabeceras_transportista() -> dict[str, str]:
+    """Cabeceras de una petición del primer transportista del .env."""
+    return {"X-API-Key": clave_de("carrier")}
