@@ -18,7 +18,6 @@ OPERACIONES: list[tuple[str, str, dict[str, Any] | None]] = [
 IDS_OPERACIONES = ["crear-edificio", "crear-taquillas", "capacidad"]
 
 
-@pytest.mark.xfail(strict=True, reason="get_principal todavía no está implementada")
 @pytest.mark.parametrize(("metodo", "ruta", "cuerpo"), OPERACIONES, ids=IDS_OPERACIONES)
 @pytest.mark.parametrize(
     "cabeceras",
@@ -38,7 +37,6 @@ async def test_sin_clave_o_con_clave_invalida_devuelve_401(
     assert respuesta.json() == {"code": "UNAUTHENTICATED", "detail": "Falta la clave de API o no es válida"}
 
 
-@pytest.mark.xfail(strict=True, reason="require_role todavía no está implementada")
 @pytest.mark.parametrize(("metodo", "ruta", "cuerpo"), OPERACIONES[:2], ids=IDS_OPERACIONES[:2])
 async def test_transportista_no_crea_edificios_ni_taquillas(
     client: AsyncClient,
