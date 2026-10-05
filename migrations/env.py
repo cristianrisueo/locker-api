@@ -8,6 +8,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from locker.buildings.models import BuildingModel  # noqa: F401  (registra la tabla en Base.metadata)
 from locker.core.config import DatabaseSettings
 from locker.core.database import Base
 
