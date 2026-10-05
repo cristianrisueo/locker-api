@@ -3,6 +3,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from locker.buildings.exceptions import BuildingNotFoundError
 from locker.buildings.repository import BuildingRepository
 from locker.lockers.repository import LockerRepository
 from locker.lockers.schemas import LockersCreated, LockersIn, Size
@@ -25,5 +26,23 @@ class LockerService:
         self._buildings = buildings
 
     async def create(self, building_id: uuid.UUID, data: LockersIn) -> LockersCreated:
-        """Da de alta taquillas de una talla con etiquetas consecutivas. Si el edificio no existe, 404."""
-        raise NotImplementedError
+        """
+        Da de alta taquillas de una talla con etiquetas consecutivas. Si el edificio no existe, 404.
+        En una transacción, con la fila del edificio bloqueada (I12): dos altas simultáneas en el mismo
+        edificio se ponen en fila, así que la segunda cuenta también las taquillas que acaba de crear la primera
+        """
+
+        # La transacción es lo primero del caso de uso, antes de cualquier consulta
+        async with self._session.begin():
+            # 1. Bloquea el edificio: otra alta en el mismo edificio espera aquí hasta que esta confirme
+            if not await self._buildings.lock(building_id):
+                raise BuildingNotFoundError(building_id)
+
+            # 2. Cuenta las taquillas que ya hay de esta talla: la numeración sigue a partir de ahí
+            existing = await self._lockers.count(building_id, data.size)
+
+            # 3. Inserta las nuevas, numeradas desde existing + 1
+            labels = [make_label(data.size, existing + n) for n in range(1, data.quantity + 1)]
+            lockers = await self._lockers.add_many(building_id, data.size, labels)
+
+        return LockersCreated(lockers=lockers)

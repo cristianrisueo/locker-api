@@ -2,6 +2,7 @@
 import uuid
 from typing import Protocol
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.buildings.models import BuildingModel
@@ -44,4 +45,7 @@ class SqlBuildingRepository:
         SELECT ... FOR UPDATE: bloquea la fila del edificio hasta el final de la transacción.
         Otra transacción que quiera bloquearla espera a que esta termine. Devuelve False si no existe.
         """
-        raise NotImplementedError
+
+        # Solo hace falta el id: lo que importa es el bloqueo, no los datos del edificio
+        stmt = select(BuildingModel.id).where(BuildingModel.id == building_id).with_for_update()
+        return await self._session.scalar(stmt) is not None

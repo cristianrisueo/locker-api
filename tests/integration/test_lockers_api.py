@@ -27,7 +27,6 @@ async def dar_de_alta(client: AsyncClient, cabeceras: dict[str, str], edificio: 
     return [taquilla["label"] for taquilla in taquillas]
 
 
-@pytest.mark.xfail(strict=True, reason="el alta de taquillas todavía no está implementada")
 async def test_alta_de_taquillas_genera_etiquetas_consecutivas_por_talla(
     client: AsyncClient, session: AsyncSession, cabeceras_operador: dict[str, str]
 ) -> None:
@@ -80,7 +79,6 @@ async def test_quantity_fuera_de_rango_o_talla_invalida_devuelve_422(
     assert respuesta.json() == {"code": "VALIDATION_ERROR", "detail": detail}
 
 
-@pytest.mark.xfail(strict=True, reason="el alta de taquillas todavía no está implementada")
 async def test_alta_en_edificio_inexistente_devuelve_404(
     client: AsyncClient, session: AsyncSession, cabeceras_operador: dict[str, str]
 ) -> None:
