@@ -1,4 +1,5 @@
 # Recoger por la API: el residente, sin clave de API, con el código derivado de la entrega.
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -8,6 +9,7 @@ from httpx import AsyncClient, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from locker.core.logging import JsonFormatter
 from locker.deliveries.pickup_code import derive
 from tests.integration.conftest import SECRETO_RECOGIDA, CrearEdificio, Reservar
 
@@ -222,3 +224,58 @@ async def test_recoger_dos_veces_devuelve_409(
     estado, recogida, taquilla = await estado_en_bd(session, depositada["id"])
     assert (estado, taquilla) == ("PICKED_UP", "FREE")
     assert recogida == datetime.fromisoformat(primera.json()["picked_up_at"])
+
+
+async def test_el_codigo_no_aparece_en_ninguna_respuesta_ni_en_los_logs(
+    client: AsyncClient,
+    crear_edificio: CrearEdificio,
+    reservar: Reservar,
+    cabeceras_transportista: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    «[F4-12]» El código de recogida no aparece en el texto de ninguna respuesta del ciclo (reservar, depositar,
+    consultar, el 403 por código incorrecto y recoger), ni en ningún registro de log de la recogida con un código
+    incorrecto (I7): solo lo conocen el servidor, que lo calcula, y el residente, que lo recibe en el aviso.
+    """
+    edificio = await crear_edificio({"M": 1})
+    reserva = await reservar(cabeceras_transportista, edificio)
+    entrega = reserva.json()["id"]
+    codigo = codigo_de(entrega)
+    deposito = await client.post(f"/v1/deliveries/{entrega}/deposit", headers=cabeceras_transportista)
+    consulta = await client.get(f"/v1/deliveries/{entrega}", headers=cabeceras_transportista)
+    # Captura todos los registros de log, de cualquier nivel, mientras se recoge con un código incorrecto
+    with caplog.at_level(logging.DEBUG):
+        incorrecta = await recoger(client, entrega, otro_codigo(codigo))
+    recogida = await recoger(client, entrega, codigo)
+
+    respuestas = [reserva, deposito, consulta, incorrecta, recogida]
+    assert [r.status_code for r in respuestas] == [201, 200, 200, 403, 200]
+    for respuesta in respuestas:
+        assert codigo not in respuesta.text
+    # Cada registro se escribe como en producción (JSON con sus campos extra), no solo su mensaje
+    for registro in caplog.records:
+        assert codigo not in JsonFormatter().format(registro)
+
+
+async def test_tras_recoger_la_taquilla_puede_volver_a_reservarse(
+    session: AsyncSession,
+    client: AsyncClient,
+    crear_edificio: CrearEdificio,
+    reservar: Reservar,
+    cabeceras_transportista: dict[str, str],
+) -> None:
+    """
+    «[F4-13]» Ciclo completo sobre la única taquilla M de un edificio: reservar, depositar y recoger la libera, y
+    un paquete nuevo puede reservarla otra vez. Sin liberarla, la nueva reserva recibiría 409 NO_LOCKER_AVAILABLE.
+    """
+    depositada = await depositar_una(client, crear_edificio, reservar, cabeceras_transportista)
+    recogida = await recoger(client, depositada["id"], codigo_de(depositada["id"]))
+    assert recogida.status_code == 200
+
+    nueva = await reservar(cabeceras_transportista, depositada["building_id"], tracking_ref="ES456")
+
+    assert nueva.status_code == 201
+    assert nueva.json()["locker_label"] == "M-01"
+    assert nueva.json()["status"] == "PENDING"
+    assert await estado_en_bd(session, nueva.json()["id"]) == ("PENDING", None, "BUSY")
