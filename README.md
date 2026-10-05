@@ -4,7 +4,7 @@ API de taquillas para paquetería: un transportista reserva una taquilla de un e
 
 Qué hace el sistema y cómo se construye está en [`docs/especificaciones.md`](docs/especificaciones.md); el orden de construcción, por fases, en [`docs/plan_fases.md`](docs/plan_fases.md).
 
-> **Estado: F3.** Sobre la base de F0 (errores, logs, identificador de petición, `/health`, contenedores con dos réplicas, tests y CI) hay claves de API con roles, alta de edificios (con país), alta de taquillas con etiqueta generada, consulta de capacidad y **reserva de taquilla** segura bajo concurrencia, también entre réplicas, con **`Idempotency-Key` obligatoria**: repetir una reserva devuelve la misma respuesta. `country` se añadió a `buildings` con una **migración con datos**. Todavía no se puede depositar, recoger ni consultar una entrega.
+> **Estado: F4.** Sobre la base de F0 (errores, logs, identificador de petición, `/health`, contenedores con dos réplicas, tests y CI) hay claves de API con roles, alta de edificios (con país), alta de taquillas con etiqueta generada, consulta de capacidad y **reserva de taquilla** segura bajo concurrencia, también entre réplicas, con **`Idempotency-Key` obligatoria**: repetir una reserva devuelve la misma respuesta. `country` se añadió a `buildings` con una **migración con datos**. El **ciclo de la entrega** está completo: el transportista deposita (y se apunta el evento del aviso en la misma transacción), consulta su entrega, y el residente recoge con un **código derivado** que no se guarda. Todavía no hay worker: los eventos se quedan en `outbox_events` y nadie envía el aviso.
 
 ## Stack
 
@@ -47,8 +47,9 @@ Responde `200 {"status": "ok"}` con una cabecera `X-Request-ID`. Si paras la bas
 | `SQL_ECHO`     | No          | `false`     | Muestra las consultas SQL en la consola                          |
 | `LOG_LEVEL`    | No          | `INFO`      | Nivel mínimo de los logs                                         |
 | `API_KEYS`     | Sí          | —           | Claves de API, en JSON de **una línea** (ver abajo)               |
+| `PICKUP_CODE_SECRET` | Sí    | —           | Secreto con el que se calcula el código de recogida (mínimo 32 caracteres) |
 
-Se leen del entorno y, si no están, del `.env`. Si falta una obligatoria, la API no arranca.
+Se leen del entorno y, si no están, del `.env`. Si falta una obligatoria, la API no arranca. Alembic solo necesita `DATABASE_URL`: migrar no exige las claves ni el secreto. Si tu `.env` es anterior a F4, añádele `PICKUP_CODE_SECRET` (el valor de desarrollo está en `.env.example`): sin ella no arrancan ni `make run` ni las réplicas de `make e2e`.
 
 ### Claves de API
 
@@ -57,13 +58,13 @@ Cada operación de `/v1` exige la cabecera `X-API-Key`. Las claves y sus roles e
 | Rol        | Qué puede hacer                                         | `name`                                                   |
 | ---------- | ------------------------------------------------------- | -------------------------------------------------------- |
 | `operator` | Crear edificios, dar de alta taquillas, ver capacidad   | No hace falta                                            |
-| `carrier`  | Ver capacidad y reservar (en fases siguientes, también depositar) | Obligatorio: es el nombre del transportista (`SEUR`) |
+| `carrier`  | Ver capacidad, reservar, depositar y consultar **sus** entregas | Obligatorio: es el nombre del transportista (`SEUR`) |
 
 Al arrancar se valida la lista: no puede estar vacía, los roles son `operator` o `carrier`, cada `carrier` lleva `name` y las claves tienen al menos 16 caracteres y no se repiten. Si algo falla, la API no arranca y el error no muestra ninguna clave.
 
 `.env.example` trae tres claves de desarrollo (no son secretos): `dev-operator-key-000000000` (operador), `dev-seur-key-0000000000000` (SEUR) y `dev-correos-key-00000000000` (Correos Express).
 
-Sin clave, o con una que no existe, la respuesta es `401 UNAUTHENTICATED`; con una clave válida de un rol sin permiso, `403 FORBIDDEN`. La clave se compara con todas las configuradas en tiempo constante (`hmac.compare_digest`) y nunca aparece en logs ni respuestas.
+Recoger no lleva clave: el residente se identifica con el id de la entrega y su código. Sin clave, o con una que no existe, la respuesta es `401 UNAUTHENTICATED`; con una clave válida de un rol sin permiso, `403 FORBIDDEN`. La clave se compara con todas las configuradas en tiempo constante (`hmac.compare_digest`) y nunca aparece en logs ni respuestas.
 
 ### Ejemplo de uso
 
@@ -100,6 +101,24 @@ curl -s -X POST localhost:8000/v1/deliveries -H "X-API-Key: dev-seur-key-0000000
 # entrega, sin reservar otra taquilla
 # Misma clave con otro cuerpo: {"code":"IDEMPOTENCY_KEY_REUSED","detail":"La clave ya se usó con otra petición distinta"}
 # Otra clave para el mismo paquete: {"code":"DUPLICATE_PACKAGE","detail":"Este paquete ya tiene una reserva activa"}
+
+ENTREGA=01a10b7c-0d3e-7f21-9a4b-5c6d7e8f9a0b   # el id de la entrega que ha devuelto
+
+# SEUR deposita el paquete: 200 con la entrega en DEPOSITED. Repetirlo da 200 con la misma entrega
+curl -s -X POST localhost:8000/v1/deliveries/$ENTREGA/deposit -H "X-API-Key: dev-seur-key-0000000000000"
+# {"id":"...","status":"DEPOSITED",...,"deposited_at":"2026-10-05T17:20:31.512345Z","picked_up_at":null}
+
+# SEUR consulta su entrega (Correos Express recibiría 404: no es suya)
+curl -s localhost:8000/v1/deliveries/$ENTREGA -H "X-API-Key: dev-seur-key-0000000000000"
+
+# El código de recogida no se guarda ni sale en ninguna respuesta: se calcula con el secreto. Hasta que exista
+# el worker (que lo enviará en el aviso), se puede calcular en una consola
+CODIGO=$(uv run python -c "import uuid; from locker.core.config import get_settings; from locker.deliveries.pickup_code import derive; print(derive(get_settings().pickup_code_secret.get_secret_value(), uuid.UUID('$ENTREGA')))")
+
+# El residente recoge, sin clave de API: 200 con la entrega en PICKED_UP, y la taquilla vuelve a estar libre
+curl -s -X POST localhost:8000/v1/deliveries/$ENTREGA/pickup -H 'Content-Type: application/json' -d "{\"code\": \"$CODIGO\"}"
+# Con otro código: {"code":"INVALID_PICKUP_CODE","detail":"Código de recogida incorrecto"}
+# Otra vez, ya recogida: {"code":"INVALID_STATE","detail":"La entrega no está en un estado que permita esta operación"}
 
 # Sin clave
 curl -s -X POST localhost:8000/v1/buildings -H 'Content-Type: application/json' -d '{"name": "Edificio Sol"}'
@@ -159,6 +178,9 @@ Cada dominio es un paquete de `src/locker/` con los mismos ficheros: `router.py`
 | `POST /v1/buildings/{building_id}/lockers`   | operador                | Da de alta de 1 a 100 taquillas de una talla (`S`, `M` o `L`), libres     |
 | `GET /v1/buildings/{building_id}/capacity`   | operador, transportista | Total y libres por talla, en orden `S`, `M`, `L`                          |
 | `POST /v1/deliveries`                        | transportista           | Reserva una taquilla libre de la talla pedida y crea la entrega en `PENDING` (`201`). Exige la cabecera `Idempotency-Key` |
+| `POST /v1/deliveries/{delivery_id}/deposit`  | transportista dueño     | Pasa la entrega a `DEPOSITED` y apunta el evento del aviso (`200`)        |
+| `GET /v1/deliveries/{delivery_id}`           | transportista dueño     | Devuelve la entrega con su estado actual (`200`)                          |
+| `POST /v1/deliveries/{delivery_id}/pickup`   | sin clave               | Con el código correcto, pasa la entrega a `PICKED_UP` y libera la taquilla (`200`) |
 
 **Etiquetas.** Cada talla lleva su propio contador por edificio: `S-01`, `M-01` y `M-02` conviven, y a partir de 100 salen tres cifras (`M-100`). Para que dos altas simultáneas no calculen la misma etiqueta, el alta bloquea la fila del edificio (`SELECT ... FOR UPDATE`) antes de contar, todo en la misma transacción: la segunda espera a la primera y sigue la numeración. Además, `uq_lockers_building_id_label` impide etiquetas repetidas en un edificio.
 
@@ -177,7 +199,24 @@ Cualquier error deshace también la clave: ninguna reserva fallida la deja guard
 
 Como la taquilla se asigna antes de crear la entrega, un paquete duplicado sin taquillas libres recibe `NO_LOCKER_AVAILABLE` (limitación aceptada A10).
 
-**Tablas.** `buildings` (`id`, `name`, `country`), `lockers` (`id`, `building_id`, `label`, `size`, `status`), `deliveries` (`id`, `locker_id`, `carrier`, `tracking_ref`, `recipient`, `status`, `deposited_at`, `picked_up_at`) e `idempotency_keys` (`carrier`, `key`, `request_hash`, `response_body` en JSONB). Llevan `CHECK` sobre las tallas, los estados y el formato del país, un índice **parcial** `ix_lockers_free_by_size` sobre `(building_id, size)` que solo contiene las taquillas libres, y dos índices **únicos parciales** sobre las entregas activas (`PENDING` o `DEPOSITED`): `uq_deliveries_active_locker` (una taquilla, una entrega activa) y `uq_deliveries_active_package` (un paquete, una entrega activa). Una entrega recogida no cuenta, así que la taquilla y la referencia se pueden volver a usar. Los identificadores son UUID v7 generados por la aplicación.
+**Ciclo de la entrega.** Cada cambio de estado es un `UPDATE ... WHERE status = <origen>` que mira cuántas filas ha cambiado; nunca se lee el estado en Python para decidir si se puede cambiar. Si dos peticiones cambian la misma entrega a la vez, la segunda espera al bloqueo de la fila, PostgreSQL vuelve a evaluar la condición con la fila ya confirmada y su `UPDATE` no cambia nada.
+
+```
+Entrega:   PENDING ──depositar──▶ DEPOSITED ──recoger──▶ PICKED_UP
+Taquilla:  FREE ──reservar──▶ BUSY ──recoger──▶ FREE
+```
+
+**Depositar.** Sin cuerpo. `UPDATE deliveries SET status = 'DEPOSITED', deposited_at = now() WHERE id = :id AND carrier = :carrier AND status = 'PENDING'`: solo el transportista dueño y solo desde `PENDING`. Si cambia la fila, en la **misma transacción** se inserta el evento `delivery.deposited` en `outbox_events` (no puede haber un depósito sin evento ni un evento sin depósito) y responde `200`. Si no cambia ninguna, se lee la entrega del mismo transportista para saber por qué: no existe o es de otro → `404 NOT_FOUND` (un `403` revelaría que existe); ya está `DEPOSITED` → `200` con la entrega tal cual y **sin segundo evento** (un transportista que reintenta); ya está `PICKED_UP` → `409 INVALID_STATE`.
+
+**Consultar.** Una lectura simple, sin transacción. El transportista va en la propia consulta, así que una entrega ajena no se encuentra, igual que una inexistente: `404 NOT_FOUND`.
+
+**Recoger.** Cuerpo `{"code": "483920"}`: exactamente seis cifras del 0 al 9 (`^[0-9]{6}$`; `\d` aceptaría cifras de otros alfabetos), si no `422`. Sin clave de API. En una transacción, y en este orden: la entrega no existe → `404`; no está `DEPOSITED` (sin depositar, o ya recogida) → `409 INVALID_STATE`; el código no es el suyo → `403 INVALID_PICKUP_CODE`, con un `detail` fijo que no repite el código, y nada cambia; `UPDATE ... SET status = 'PICKED_UP', picked_up_at = now() WHERE id = :id AND status = 'DEPOSITED'`, y si otra recogida simultánea ganó y no cambia ninguna fila → `409 INVALID_STATE`; por último libera la taquilla con `UPDATE lockers SET status = 'FREE' WHERE id = :locker_id AND status = 'BUSY'`. Recoger dos veces da `409`, mientras que depositar dos veces da `200` (limitación aceptada A14).
+
+**Código de recogida** (`deliveries/pickup_code.py`). No se guarda: se deriva del secreto y del id de la entrega. `derive` calcula el HMAC-SHA256 del id con `PICKUP_CODE_SECRET` como clave, toma sus cuatro primeros bytes como entero, lo reduce módulo 1.000.000 y lo escribe con ceros a la izquierda hasta seis cifras. `matches` compara en tiempo constante (`hmac.compare_digest`). El código no aparece en ninguna tabla, respuesta, evento ni log. Cambiar el secreto invalida los códigos pendientes, y no hay límite de intentos (limitación aceptada A1).
+
+**Outbox** (`outbox/`, por ahora parcial). `events.py` define el tipo `delivery.deposited` y su contenido, que es solo `{"delivery_id": "..."}`: ni el código ni los datos del residente. `repository.py` solo inserta. Cada evento se crea con `attempts = 0` y `next_attempt_at = now()`. El worker que los envía llega en la fase siguiente.
+
+**Tablas.** `buildings` (`id`, `name`, `country`), `lockers` (`id`, `building_id`, `label`, `size`, `status`), `deliveries` (`id`, `locker_id`, `carrier`, `tracking_ref`, `recipient`, `status`, `deposited_at`, `picked_up_at`), `idempotency_keys` (`carrier`, `key`, `request_hash`, `response_body` en JSONB) y `outbox_events` (`id`, que es el `event_id`, `type`, `payload` en JSONB, `attempts` y `next_attempt_at`, donde `NULL` significa evento muerto; sin índices, porque los eventos enviados se borrarán). Llevan `CHECK` sobre las tallas, los estados y el formato del país, un índice **parcial** `ix_lockers_free_by_size` sobre `(building_id, size)` que solo contiene las taquillas libres, y dos índices **únicos parciales** sobre las entregas activas (`PENDING` o `DEPOSITED`): `uq_deliveries_active_locker` (una taquilla, una entrega activa) y `uq_deliveries_active_package` (un paquete, una entrega activa). Una entrega recogida no cuenta, así que la taquilla y la referencia se pueden volver a usar. Los identificadores son UUID v7 generados por la aplicación.
 
 **Migración con datos.** `country` se añadió a `buildings` cuando ya había edificios, con el patrón expand → backfill → contract en una sola migración: se añade la columna admitiendo `NULL` (expand), se rellena con `UPDATE buildings SET country = 'ES'` (backfill) y después se exige con `NOT NULL` y `ck_buildings_country_format` (contract). Añadirla directamente como `NOT NULL` fallaría con los edificios existentes. El `downgrade` quita el `CHECK` y la columna, y conserva los edificios.
 
@@ -200,7 +239,7 @@ Tres niveles; cada comportamiento se prueba en el más bajo que caza su bug:
 
 | Nivel       | Carpeta             | Qué prueba                                                                                          |
 | ----------- | ------------------- | --------------------------------------------------------------------------------------------------- |
-| Unitario    | `tests/unit`        | Lógica pura en memoria: traducción de errores, formateador de logs, validación de `API_KEYS`, etiquetas, huella |
+| Unitario    | `tests/unit`        | Lógica pura en memoria: traducción de errores, formateador de logs, validación de `API_KEYS`, etiquetas, huella, código de recogida |
 | Integración | `tests/integration` | La API en el mismo proceso (httpx + `ASGITransport`) contra PostgreSQL real                         |
 | E2E y smoke | `tests/e2e`         | Peticiones reales contra el sistema en contenedores, en cada réplica                                |
 
@@ -209,9 +248,10 @@ Tres niveles; cada comportamiento se prueba en el más bajo que caza su bug:
 - **Aislamiento**: al terminar cada test se vacían las tablas con `TRUNCATE ... RESTART IDENTITY CASCADE`.
 - **Una sesión por petición**, como en producción, sustituyendo `get_session` con `dependency_overrides`.
 - **Configuración propia**: los tests sustituyen `get_settings` con claves de prueba, así que no dependen del `.env` ni de `API_KEYS` del entorno.
-- **Concurrencia** con varias sesiones y `asyncio.gather` (dos altas de taquillas a la vez, 10 reservas para 5 taquillas, dos reservas idénticas con la misma clave), sin `sleep`. Los casos deterministas dejan una transacción abierta (con el edificio bloqueado, una taquilla ocupada o una clave registrada) y esperan a ver la petición parada en un bloqueo en `pg_stat_activity`. Antes de lanzarlas se abren las conexiones del pool: si no, las peticiones no llegan a solaparse y el test pasaría aunque faltase la protección. Entre procesos reales, un E2E reparte 10 reservas entre `api-1` y `api-2` con hilos.
+- **Concurrencia** con varias sesiones y `asyncio.gather` (dos altas de taquillas a la vez, 10 reservas para 5 taquillas, dos reservas idénticas con la misma clave, dos recogidas de la misma entrega), sin `sleep`. Los casos deterministas dejan una transacción abierta (con el edificio bloqueado, una taquilla ocupada, una clave registrada, una entrega depositada o recogida) y esperan a ver la petición parada en un bloqueo en `pg_stat_activity`. Antes de lanzarlas se abren las conexiones del pool: si no, las peticiones no llegan a solaparse y el test pasaría aunque faltase la protección. Entre procesos reales, un E2E reparte 10 reservas entre `api-1` y `api-2` con hilos.
 - **Migraciones**: un test comprueba que `alembic check` no ve diferencias y que todas las migraciones bajan y suben en una base de datos vacía. Otro migra hasta la revisión anterior a `country`, inserta edificios, aplica la de `country` y comprueba que se conservan con `ES`, también tras bajar y volver a subir.
-- **Sin dobles**: la base de datos caída se prueba con una URL inalcanzable.
+- **Sin dobles**: la base de datos caída se prueba con una URL inalcanzable, y la atomicidad del depósito con un trigger que hace fallar de verdad el `INSERT` del evento (la entrega sigue `PENDING`).
+- **El código de recogida**: los tests lo calculan con `pickup_code.derive` y el secreto de su configuración, y comprueban que no aparece en ninguna respuesta del ciclo ni en los logs. El E2E recorre reservar, depositar y recoger alternando `api-1` y `api-2`, con el secreto del `.env`.
 
 `make test` no ejecuta los E2E. `make e2e` levanta `db`, aplica las migraciones con `migrate`, arranca `api-1` y `api-2` y pasa `tests/e2e` contra `http://127.0.0.1:8001` y `http://127.0.0.1:8002`; al terminar para las réplicas. Usa la base de datos de desarrollo.
 
