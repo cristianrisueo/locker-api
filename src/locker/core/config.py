@@ -71,6 +71,12 @@ class Settings(DatabaseSettings):
     # No está en DatabaseSettings: migrar no lo necesita
     pickup_code_secret: SecretStr = Field(min_length=32)
 
+    # Outbox: intentos de envío de un aviso antes de dar el evento por muerto, base de la espera entre reintentos
+    # (2, 4, 8 y 16 segundos con la base por defecto; 0 en los tests) y pausa del worker cuando no hay eventos
+    outbox_max_attempts: int = 5
+    outbox_backoff_base_seconds: float = 2
+    outbox_poll_interval_seconds: float = 1
+
     @field_validator("api_keys")
     @classmethod
     def keys_are_unique(cls, api_keys: list[ApiKey]) -> list[ApiKey]:
