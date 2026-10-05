@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from locker.core.config import get_settings
 from locker.core.database import create_engine, create_session_factory
+from locker.core.exception_handlers import register_exception_handlers
 
 
 @asynccontextmanager
@@ -28,3 +29,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 # Crea la aplicación de FastAPI
 app = FastAPI(title="Locker API", lifespan=lifespan)
+
+# Registra los manejadores que traducen los errores a respuestas HTTP con la forma {code, detail}
+register_exception_handlers(app)

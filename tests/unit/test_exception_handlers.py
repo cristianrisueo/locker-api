@@ -47,7 +47,6 @@ def crear_app_que_lanza(error: Exception) -> FastAPI:
     return app
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="Faltan las familias de errores y sus manejadores")
 @pytest.mark.parametrize(
     ("tipo_error", "detail", "estado", "code"),
     [
@@ -82,7 +81,6 @@ class TaquillasIn(BaseModel):
     quantity: int
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="Falta el manejador de RequestValidationError")
 @pytest.mark.parametrize(
     ("cuerpo", "detail"),
     [
