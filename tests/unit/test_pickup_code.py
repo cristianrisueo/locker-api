@@ -35,8 +35,11 @@ def test_el_codigo_conserva_los_ceros_a_la_izquierda() -> None:
     «[F4-01]» Un código por debajo de 100000 se escribe con ceros a la izquierda hasta seis cifras («042137»,
     no «42137»). El id se busca recorriendo ids fijos hasta dar con uno cuyo código empiece por 0.
     """
+    # Uno de cada diez códigos empieza por 0: entre mil ids tiene que haber alguno. Si no aparece ninguno, es que
+    # los ceros a la izquierda se pierden
     ids = (uuid.UUID(int=n) for n in range(1000))
-    con_cero = next(entrega for entrega in ids if derive(SECRETO, entrega).startswith("0"))
+    con_cero = next((entrega for entrega in ids if derive(SECRETO, entrega).startswith("0")), None)
+    assert con_cero is not None, "ningún código empieza por 0: faltan los ceros a la izquierda"
 
     codigo = derive(SECRETO, con_cero)
     assert len(codigo) == 6
