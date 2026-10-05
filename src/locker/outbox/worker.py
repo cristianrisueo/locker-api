@@ -16,8 +16,9 @@ from locker.outbox.notifier import LogNotifier, Notifier
 from locker.outbox.repository import SqlOutboxRepository
 from locker.outbox.service import OutboxService
 
-# Logger del worker: arranque, parada y errores inesperados del bucle
-logger = logging.getLogger(__name__)
+# Logger del worker: arranque, parada y errores inesperados del bucle. El nombre va escrito: con
+# `python -m locker.outbox.worker`, __name__ vale "__main__" y las líneas no dirían de dónde vienen
+logger = logging.getLogger("locker.outbox.worker")
 
 
 async def process_one(session_factory: async_sessionmaker[AsyncSession], notifier: Notifier, settings: Settings) -> bool:
