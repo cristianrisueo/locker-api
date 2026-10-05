@@ -3,8 +3,6 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-import pytest
-
 from locker.core.logging import JsonFormatter, request_id_var
 
 
@@ -15,7 +13,6 @@ def crear_registro(**extra: str) -> logging.LogRecord:
     )
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="Falta el formateador JSON")
 def test_formateador_escribe_una_linea_json_con_campos_comunes_y_extras() -> None:
     """
     «[F0-06]» Una línea JSON válida con ts (ISO 8601 en UTC), level, logger, message (ya con sus argumentos),
@@ -41,7 +38,6 @@ def test_formateador_escribe_una_linea_json_con_campos_comunes_y_extras() -> Non
     }
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="Falta el formateador JSON")
 def test_formateador_escribe_request_id_nulo_fuera_de_una_peticion() -> None:
     """«[F0-06]» Fuera de una petición (por ejemplo, en el worker) request_id aparece y es nulo."""
     datos = json.loads(JsonFormatter().format(crear_registro()))
