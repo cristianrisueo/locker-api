@@ -119,3 +119,86 @@ async def test_sin_clave_de_api_devuelve_401_aunque_falte_idempotency_key(
 
     assert respuesta.status_code == 401
     assert respuesta.json() == {"code": "UNAUTHENTICATED", "detail": "Falta la clave de API o no es válida"}
+
+
+async def test_una_reserva_fallida_no_guarda_la_clave_y_se_puede_reintentar(
+    session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
+) -> None:
+    """
+    «[F3-07]» Una reserva que falla (409 NO_LOCKER_AVAILABLE) no deja su clave (I8). Cuando queda libre una
+    taquilla, el reintento con la misma clave reserva de verdad, en vez de encontrar la clave sin respuesta.
+    """
+    edificio = await crear_edificio({"M": 1})
+    primera = await reservar(cabeceras_transportista, edificio, tracking_ref="ES123", idempotency_key="reserva-1")
+    sin_hueco = await reservar(cabeceras_transportista, edificio, tracking_ref="ES456", idempotency_key="reserva-2")
+    assert sin_hueco.status_code == 409
+    assert sin_hueco.json() == {"code": "NO_LOCKER_AVAILABLE", "detail": "No quedan taquillas de esta talla disponibles"}
+    assert await claves(session) == [("SEUR", "reserva-1", fingerprint(cuerpo_de(edificio)), primera.json())]
+
+    # El residente recoge el primer paquete: se hace por SQL, como lo hará recoger (todavía no existe)
+    await session.execute(text("UPDATE deliveries SET status = 'PICKED_UP', picked_up_at = now()"))
+    await session.execute(text("UPDATE lockers SET status = 'FREE'"))
+    await session.commit()
+
+    respuesta = await reservar(cabeceras_transportista, edificio, tracking_ref="ES456", idempotency_key="reserva-2")
+
+    assert respuesta.status_code == 201
+    assert respuesta.json()["locker_label"] == "M-01"
+    assert respuesta.json()["tracking_ref"] == "ES456"
+    assert await claves(session) == [
+        ("SEUR", "reserva-1", fingerprint(cuerpo_de(edificio)), primera.json()),
+        ("SEUR", "reserva-2", fingerprint(cuerpo_de(edificio, "ES456")), respuesta.json()),
+    ]
+
+
+async def test_la_misma_clave_de_dos_transportistas_son_dos_reservas(
+    session: AsyncSession,
+    crear_edificio: CrearEdificio,
+    reservar: Reservar,
+    cabeceras_transportista: dict[str, str],
+    cabeceras_correos: dict[str, str],
+) -> None:
+    """
+    «[F3-08]» Las claves son por transportista: SEUR y Correos Express usan la misma clave con el mismo cuerpo
+    y cada uno obtiene su propia entrega, en su propia taquilla. Ninguno recibe la respuesta del otro.
+    """
+    edificio = await crear_edificio({"M": 2})
+    seur = await reservar(cabeceras_transportista, edificio, idempotency_key="reserva-1")
+
+    correos = await reservar(cabeceras_correos, edificio, idempotency_key="reserva-1")
+
+    assert (seur.status_code, correos.status_code) == (201, 201)
+    assert (seur.json()["carrier"], correos.json()["carrier"]) == ("SEUR", "Correos Express")
+    assert (seur.json()["locker_label"], correos.json()["locker_label"]) == ("M-01", "M-02")
+    assert await entregas(session) == [
+        (seur.json()["id"], "SEUR", "ES123"),
+        (correos.json()["id"], "Correos Express", "ES123"),
+    ]
+    huella = fingerprint(cuerpo_de(edificio))
+    assert await claves(session) == [
+        ("Correos Express", "reserva-1", huella, correos.json()),
+        ("SEUR", "reserva-1", huella, seur.json()),
+    ]
+
+
+async def test_el_reintento_devuelve_la_respuesta_original_aunque_la_entrega_haya_cambiado(
+    session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
+) -> None:
+    """
+    «[F3-09]» Lo que se guarda es la respuesta original, no la entrega: si la entrega pasa a DEPOSITED, el
+    reintento sigue devolviendo la reserva tal como se respondió (PENDING, sin deposited_at).
+    """
+    edificio = await crear_edificio({"M": 1})
+    original = await reservar(cabeceras_transportista, edificio, idempotency_key="reserva-1")
+    assert original.status_code == 201
+
+    # El transportista deposita el paquete: se hace por SQL, porque depositar todavía no existe
+    await session.execute(text("UPDATE deliveries SET status = 'DEPOSITED', deposited_at = now()"))
+    await session.commit()
+
+    repetida = await reservar(cabeceras_transportista, edificio, idempotency_key="reserva-1")
+
+    assert repetida.status_code == 201
+    assert repetida.json() == original.json()
+    assert repetida.json()["status"] == "PENDING"
+    assert await session.scalar(text("SELECT status FROM deliveries")) == "DEPOSITED"
