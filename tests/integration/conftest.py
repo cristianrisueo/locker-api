@@ -23,6 +23,7 @@ from testcontainers.community.postgres import PostgresContainer
 from locker.core.config import ApiKey, DatabaseSettings, Settings, get_settings
 from locker.core.database import Base, create_engine, create_session_factory, get_session
 from locker.main import app  # importar la app registra todos los modelos en Base.metadata
+from tests.integration.notificador_falso import NotificadorFalso
 
 # Raíz del repositorio, donde está alembic.ini
 ROOT = Path(__file__).resolve().parents[2]
@@ -306,3 +307,9 @@ async def bd_migraciones(postgres: PostgresContainer) -> AsyncIterator[str]:
     async with admin.connect() as conn:
         await conn.execute(text(f'DROP DATABASE "{nombre}" WITH (FORCE)'))
     await admin.dispose()
+
+
+@pytest.fixture
+def notificador() -> NotificadorFalso:
+    """Un NotificadorFalso nuevo en cada test, que envía sin fallar hasta que el test le diga otra cosa."""
+    return NotificadorFalso()
