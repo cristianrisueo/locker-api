@@ -1,9 +1,13 @@
 # Configuración de la aplicación.
 # Dos clases: DatabaseSettings (lo único que necesitan Alembic y los tests de base de datos) y Settings (todo lo demás).
 from functools import lru_cache
+from typing import Literal, Self
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Roles de las claves de API: el operador da de alta edificios y taquillas; el transportista reserva y deposita
+type Role = Literal["operator", "carrier"]
 
 
 class DatabaseSettings(BaseSettings):
@@ -23,11 +27,21 @@ class DatabaseSettings(BaseSettings):
 
 
 class ApiKey(BaseModel):
-    """Una entrada de API_KEYS: la clave, el rol de quien la usa y, si es transportista, su nombre."""
+    """
+    Una entrada de API_KEYS: la clave, el rol de quien la usa y, si es transportista, su nombre.
+    La clave es un SecretStr: al imprimir la configuración sale como '**********', nunca en claro (I9)
+    """
 
-    key: SecretStr
-    role: str
+    key: SecretStr = Field(min_length=16)
+    role: Role
     name: str | None = None
+
+    @model_validator(mode="after")
+    def carrier_has_name(self) -> Self:
+        """Un transportista necesita nombre: es el que se guarda en sus entregas."""
+        if self.role == "carrier" and not self.name:
+            raise ValueError("una clave con rol carrier necesita name")
+        return self
 
 
 class Settings(DatabaseSettings):
@@ -36,10 +50,24 @@ class Settings(DatabaseSettings):
     Hereda la de la base de datos, así que se puede pasar donde se pida un DatabaseSettings
     """
 
+    # hide_input_in_errors: si la validación falla, el mensaje no repite el valor recibido.
+    # Sin esto, un error en API_KEYS escribiría la clave en los logs del arranque (I9)
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
+
     # Nivel mínimo de los logs: DEBUG, INFO, WARNING, ERROR o CRITICAL
     log_level: str = "INFO"
 
-    api_keys: list[ApiKey] = []
+    # Claves de API, leídas del JSON de una línea de API_KEYS. Obligatoria y con al menos una entrada
+    api_keys: list[ApiKey] = Field(min_length=1)
+
+    @field_validator("api_keys")
+    @classmethod
+    def keys_are_unique(cls, api_keys: list[ApiKey]) -> list[ApiKey]:
+        """Dos entradas con la misma clave no dirían quién llama: se rechaza al arrancar."""
+        keys = [entry.key.get_secret_value() for entry in api_keys]
+        if len(set(keys)) != len(keys):
+            raise ValueError("hay claves de API repetidas")
+        return api_keys
 
 
 @lru_cache

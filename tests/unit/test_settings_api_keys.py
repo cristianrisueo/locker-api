@@ -34,7 +34,6 @@ def test_api_keys_valida_se_lee_del_json(monkeypatch: pytest.MonkeyPatch) -> Non
     assert leidas == [(CLAVE_OPERADOR, "operator", None), (CLAVE_SEUR, "carrier", "SEUR")]
 
 
-@pytest.mark.xfail(strict=True, reason="api_keys todavía no se valida")
 @pytest.mark.parametrize(
     "api_keys",
     [
