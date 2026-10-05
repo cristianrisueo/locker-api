@@ -47,7 +47,7 @@ class SqlBuildingRepository:
         """
         SELECT ... FOR UPDATE: bloquea la fila del edificio hasta el final de la transacción.
         Otra transacción que quiera bloquearla espera a que esta termine. Devuelve False si no existe.
-        Este método se llamada desde el servicio de taquillas, en la práctica hace de mutex para que dos altas simultáneas
+        Este método se llama desde el servicio de taquillas, en la práctica hace de mutex para que dos altas simultáneas
         en el mismo edificio se pongan en fila y no se solapen.
         """
 

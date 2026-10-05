@@ -1,5 +1,5 @@
-# Seguridad: autenticación por clave de API y comprobación de roles.
-# La clave llega en la cabecera X-API-Key y se compara con las de la configuración: nunca se consulta la base de datos.
+# Autenticación y autorización de rol por clave de API.
+# La clave llega en la cabecera X-API-Key y se compara con las de la configuración. No se consulta la base de datos.
 import hmac
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -11,14 +11,18 @@ from fastapi.security import APIKeyHeader
 from locker.core.config import ApiKey, Role, Settings, get_settings
 from locker.core.exceptions import ForbiddenError, UnauthenticatedError
 
-# Declara la cabecera X-API-Key (así aparece en la documentación de Swagger).
+# Declara la cabecera X-API-Key (como aparece en la documentación de Swagger).
 # auto_error=False: si falta, FastAPI no responde con su propio error; lo decide get_principal con el formato común
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 @dataclass(frozen=True)
 class Principal:
-    """Quién llama: su rol y, si es transportista, su nombre. Nunca lleva la clave."""
+    """
+    Quién llama a la API, identificado por su clave: su rol y, si es transportista, su nombre
+    Es lo que devuelve get_principal. No lleva la clave, para que no se filtre por un log o un error
+    @dataclass(frozen=True): no se puede modificar, lo identificado al principio de la petición no cambia
+    """
 
     role: Role
     name: str | None
@@ -30,8 +34,9 @@ async def get_principal(
 ) -> Principal:
     """
     Dependencia de FastAPI: identifica a quien llama por su clave de API.
-    Falta la clave o no está en la configuración -> 401. El error nunca repite la clave recibida (I9)
+    Falta la clave o no está en la configuración -> 401. El error nunca repite la clave recibida
     """
+
     # Sin cabecera (o vacía), APIKeyHeader devuelve None
     if not api_key:
         raise UnauthenticatedError("Falta la clave de API o no es válida")
@@ -41,6 +46,7 @@ async def get_principal(
     # posición de la lista está la clave. Se comparan bytes: compare_digest no admite textos con caracteres no ASCII
     received = api_key.encode()
     found: ApiKey | None = None
+
     for entry in settings.api_keys:
         if hmac.compare_digest(entry.key.get_secret_value().encode(), received):
             found = entry
@@ -54,13 +60,14 @@ async def get_principal(
 def require_role(*roles: Role) -> Callable[[Principal], Awaitable[Principal]]:
     """
     Construye una dependencia que deja pasar solo a los roles indicados.
-    Uso en una ruta: Depends(require_role("operator")). Primero identifica (401) y después comprueba el rol (403)
+    Uso en una ruta: Depends(require_role("operator")). Primero identifica y después comprueba el rol
     """
 
     async def check_role(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
         # La clave es válida, pero su rol no permite esta operación
         if principal.role not in roles:
             raise ForbiddenError("Esta clave no tiene permiso para esta operación")
+
         return principal
 
     return check_role

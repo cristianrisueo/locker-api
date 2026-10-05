@@ -126,9 +126,6 @@ async def limpiar_tablas(session_factory: async_sessionmaker[AsyncSession]) -> A
     """
     yield
     tables = ", ".join(table.name for table in Base.metadata.sorted_tables)
-    # Mientras no haya modelos no hay nada que vaciar (y un TRUNCATE sin tablas es un error de sintaxis)
-    if not tables:
-        return
     async with session_factory() as session:
         await session.execute(text("SET LOCAL lock_timeout = '5s'"))
         await session.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))

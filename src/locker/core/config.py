@@ -29,18 +29,23 @@ class DatabaseSettings(BaseSettings):
 class ApiKey(BaseModel):
     """
     Una entrada de API_KEYS: la clave, el rol de quien la usa y, si es transportista, su nombre.
-    La clave es un SecretStr: al imprimir la configuración sale como '**********', nunca en claro (I9)
+    La clave es un SecretStr: al imprimir la configuración sale como '**********', nunca en claro
     """
 
-    key: SecretStr = Field(min_length=16)
-    role: Role
-    name: str | None = None
+    key: SecretStr = Field(min_length=16)  # String de al menos 16 caracteres, es el secreto que identifica a quien llama
+    role: Role  # Literal["operator", "carrier"]
+    name: str | None = None  # Si es transportista, su nombre. Si es operador, no se usa y puede ser None
 
     @model_validator(mode="after")
     def carrier_has_name(self) -> Self:
-        """Un transportista necesita nombre: es el que se guarda en sus entregas."""
+        """
+        Regla que se aplica una vez validado. Es decir, cuando se ha leído la clave, el rol y el nombre (si lo hay).
+        Un transportista necesita nombre: es el que se guarda en sus entregas.
+        Como no tenemos tabla de transportistas el nombre recibido es lo que lo identifica.
+        """
         if self.role == "carrier" and not self.name:
             raise ValueError("una clave con rol carrier necesita name")
+
         return self
 
 
@@ -51,8 +56,9 @@ class Settings(DatabaseSettings):
     """
 
     # hide_input_in_errors: si la validación falla, el mensaje no repite el valor recibido.
-    # Sin esto, un error en API_KEYS escribiría la clave en los logs del arranque (I9)
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
+    # Sin esto, un error en API_KEYS escribiría la clave en los logs del arranque.
+    # env_file y extra se heredan de DatabaseSettings: pydantic-settings combina ambas configuraciones
+    model_config = SettingsConfigDict(hide_input_in_errors=True)
 
     # Nivel mínimo de los logs: DEBUG, INFO, WARNING, ERROR o CRITICAL
     log_level: str = "INFO"
