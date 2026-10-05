@@ -1,0 +1,37 @@
+# Integración continua: en cada push a main y en cada PR pasa las comprobaciones y los tests.
+# Los tests de integración usan testcontainers: el runner ubuntu-latest ya trae Docker.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Si llega un push nuevo a la misma rama, cancela la ejecución anterior
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      # uv instala el Python de .python-version y las dependencias exactas de uv.lock
+      - run: uv sync --locked
+
+      - run: make check
+
+      # make check formatea en vez de fallar: si ha cambiado algo, el código no venía formateado
+      - run: git diff --exit-code
+
+      - run: make test
