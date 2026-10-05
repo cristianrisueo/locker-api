@@ -1,16 +1,13 @@
 # Reservar por la API: asignación de taquilla, errores y paquetes duplicados.
 import uuid
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
-from httpx import AsyncClient, Response
+from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Los ayudantes del conftest: crear_edificio({"M": 2}) y reservar(cabeceras, edificio, ...)
-type CrearEdificio = Callable[[dict[str, int]], Awaitable[str]]
-type Reservar = Callable[..., Awaitable[Response]]
+from tests.integration.conftest import CrearEdificio, Reservar
 
 
 async def taquillas(session: AsyncSession, edificio: str) -> list[tuple[str, str]]:
@@ -152,10 +149,9 @@ async def test_solo_un_transportista_puede_reservar(
     """«[F2-03]» Sin clave es un 401 y con la del operador un 403. Ninguno ocupa la taquilla."""
     edificio = await crear_edificio({"M": 1})
     # Las cabeceras del operador son una fixture: el parámetro trae su nombre y se piden aquí
-    if isinstance(cabeceras, str):
-        cabeceras = request.getfixturevalue(cabeceras)
+    valor: dict[str, str] = request.getfixturevalue(cabeceras) if isinstance(cabeceras, str) else cabeceras
 
-    respuesta = await reservar(cabeceras, edificio)
+    respuesta = await reservar(valor, edificio)
 
     assert (respuesta.status_code, respuesta.json()) == esperado
     assert await taquillas(session, edificio) == [("M-01", "FREE")]

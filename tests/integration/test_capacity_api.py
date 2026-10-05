@@ -5,29 +5,19 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
-async def crear_edificio(client: AsyncClient, cabeceras: dict[str, str], taquillas: dict[str, int]) -> str:
-    """Crea un edificio por la API con las taquillas indicadas ({talla: cantidad}) y devuelve su id."""
-    respuesta = await client.post("/v1/buildings", json={"name": "Edificio Sol"}, headers=cabeceras)
-    id_edificio: str = respuesta.json()["id"]
-    for talla, cantidad in taquillas.items():
-        alta = await client.post(
-            f"/v1/buildings/{id_edificio}/lockers", json={"size": talla, "quantity": cantidad}, headers=cabeceras
-        )
-        assert alta.status_code == 201
-    return id_edificio
+from tests.integration.conftest import CrearEdificio
 
 
 async def test_capacidad_desglosa_total_y_libres_por_talla_en_orden_s_m_l(
-    client: AsyncClient, session: AsyncSession, cabeceras_operador: dict[str, str]
+    client: AsyncClient, session: AsyncSession, crear_edificio: CrearEdificio, cabeceras_operador: dict[str, str]
 ) -> None:
     """
     «[F1-09]» La capacidad cuenta, por talla, todas las taquillas y las libres. Las ocupadas se ponen por SQL
     (todavía no hay reservas). Sale en orden S, M, L aunque se dieran de alta en otro, y no cuenta las de
     otros edificios.
     """
-    edificio = await crear_edificio(client, cabeceras_operador, {"L": 1, "M": 3, "S": 2})
-    await crear_edificio(client, cabeceras_operador, {"M": 5})
+    edificio = await crear_edificio({"L": 1, "M": 3, "S": 2})
+    await crear_edificio({"M": 5})
     await session.execute(
         text("UPDATE lockers SET status = 'BUSY' WHERE building_id = :id AND label IN ('M-01', 'S-02')"),
         {"id": edificio},
@@ -48,10 +38,10 @@ async def test_capacidad_desglosa_total_y_libres_por_talla_en_orden_s_m_l(
 
 
 async def test_transportista_consulta_la_capacidad_de_un_edificio_sin_taquillas(
-    client: AsyncClient, cabeceras_operador: dict[str, str], cabeceras_transportista: dict[str, str]
+    client: AsyncClient, crear_edificio: CrearEdificio, cabeceras_transportista: dict[str, str]
 ) -> None:
     """«[F1-10]» Un edificio sin taquillas devuelve sizes vacío, y un transportista también puede consultarla."""
-    edificio = await crear_edificio(client, cabeceras_operador, {})
+    edificio = await crear_edificio({})
 
     respuesta = await client.get(f"/v1/buildings/{edificio}/capacity", headers=cabeceras_transportista)
 

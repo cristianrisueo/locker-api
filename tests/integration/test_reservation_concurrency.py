@@ -1,18 +1,12 @@
 # Reservas simultáneas: la asignación en una sola sentencia con SKIP LOCKED reparte taquillas distintas.
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
 
-from httpx import Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from locker.lockers.repository import SqlLockerRepository
-from tests.integration.conftest import AbrirConexiones
-
-# Los ayudantes del conftest: crear_edificio({"M": 5}) y reservar(cabeceras, edificio, ...)
-type CrearEdificio = Callable[[dict[str, int]], Awaitable[str]]
-type Reservar = Callable[..., Awaitable[Response]]
+from tests.integration.conftest import AbrirConexiones, CrearEdificio, Reservar
 
 
 async def test_diez_reservas_simultaneas_para_cinco_taquillas(
