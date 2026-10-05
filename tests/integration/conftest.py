@@ -2,6 +2,7 @@
 # Ciclo de vida:
 #   sesión de pytest -> un contenedor, migrado a head una vez, y un engine compartido
 #   cada test        -> sus propias sesiones; al terminar, TRUNCATE de todas las tablas
+import asyncio
 import os
 import subprocess
 import sys
@@ -171,6 +172,31 @@ async def client(session_factory: async_sessionmaker[AsyncSession], settings: Se
         yield c
     app.dependency_overrides.pop(get_session)
     app.dependency_overrides.pop(get_settings)
+
+
+class AbrirConexiones(Protocol):
+    """Precalienta el pool: await abrir_conexiones(5) deja 5 conexiones abiertas y libres."""
+
+    async def __call__(self, cuantas: int) -> None: ...
+
+
+@pytest.fixture
+def abrir_conexiones(session_factory: async_sessionmaker[AsyncSession]) -> AbrirConexiones:
+    """
+    Deja el pool con varias conexiones abiertas y libres antes de una prueba de concurrencia. Abrir una conexión
+    nueva tarda unos milisegundos: sin esto, las primeras peticiones podrían terminar antes de que lleguen las
+    demás, y el test pasaría aunque las peticiones no se solaparan (y faltase la protección que prueba).
+    El pool guarda como mucho 5 conexiones libres (pool_size por defecto): pedir más no deja más preparadas
+    """
+
+    async def abrir(cuantas: int) -> None:
+        async def usar_una() -> None:
+            async with session_factory() as s:
+                await s.execute(text("SELECT 1"))
+
+        await asyncio.gather(*(usar_una() for _ in range(cuantas)))
+
+    return abrir
 
 
 class CrearEdificio(Protocol):

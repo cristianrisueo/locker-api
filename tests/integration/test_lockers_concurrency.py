@@ -3,27 +3,15 @@ import asyncio
 
 from httpx import AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
-
-async def abrir_conexiones(session_factory: async_sessionmaker[AsyncSession], cuantas: int) -> None:
-    """
-    Deja el pool con varias conexiones abiertas y libres. Abrir una conexión nueva tarda unos milisegundos:
-    sin esto, la segunda petición podría llegar a la base de datos cuando la primera ya ha terminado,
-    y el test pasaría aunque faltase el bloqueo
-    """
-
-    async def usar_una() -> None:
-        async with session_factory() as s:
-            await s.execute(text("SELECT 1"))
-
-    await asyncio.gather(*(usar_una() for _ in range(cuantas)))
+from tests.integration.conftest import AbrirConexiones
 
 
 async def test_dos_altas_simultaneas_de_la_misma_talla_salen_consecutivas(
     client: AsyncClient,
     session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
+    abrir_conexiones: AbrirConexiones,
     cabeceras_operador: dict[str, str],
 ) -> None:
     """
@@ -37,7 +25,7 @@ async def test_dos_altas_simultaneas_de_la_misma_talla_salen_consecutivas(
     await client.post(ruta, json={"size": "M", "quantity": 2}, headers=cabeceras_operador)
 
     # Las dos peticiones se lanzan a la vez en el mismo bucle de eventos, con sus conexiones ya abiertas
-    await abrir_conexiones(session_factory, 2)
+    await abrir_conexiones(2)
     primera, segunda = await asyncio.gather(
         client.post(ruta, json={"size": "M", "quantity": 1}, headers=cabeceras_operador),
         client.post(ruta, json={"size": "M", "quantity": 1}, headers=cabeceras_operador),

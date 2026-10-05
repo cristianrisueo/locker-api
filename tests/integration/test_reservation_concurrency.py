@@ -8,29 +8,16 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from locker.lockers.repository import SqlLockerRepository
+from tests.integration.conftest import AbrirConexiones
 
 # Los ayudantes del conftest: crear_edificio({"M": 5}) y reservar(cabeceras, edificio, ...)
 type CrearEdificio = Callable[[dict[str, int]], Awaitable[str]]
 type Reservar = Callable[..., Awaitable[Response]]
 
 
-async def abrir_conexiones(session_factory: async_sessionmaker[AsyncSession], cuantas: int) -> None:
-    """
-    Deja el pool con varias conexiones abiertas y libres. Abrir una conexión nueva tarda unos milisegundos:
-    sin esto, las primeras peticiones podrían terminar antes de que lleguen las demás, y el test pasaría
-    aunque las reservas no se solaparan. El pool guarda como mucho 5 conexiones libres (pool_size por defecto)
-    """
-
-    async def usar_una() -> None:
-        async with session_factory() as s:
-            await s.execute(text("SELECT 1"))
-
-    await asyncio.gather(*(usar_una() for _ in range(cuantas)))
-
-
 async def test_diez_reservas_simultaneas_para_cinco_taquillas(
     session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
+    abrir_conexiones: AbrirConexiones,
     crear_edificio: CrearEdificio,
     reservar: Reservar,
     cabeceras_transportista: dict[str, str],
@@ -42,7 +29,7 @@ async def test_diez_reservas_simultaneas_para_cinco_taquillas(
     """
     edificio = await crear_edificio({"M": 5})
 
-    await abrir_conexiones(session_factory, 5)
+    await abrir_conexiones(5)
     respuestas = await asyncio.gather(
         *(reservar(cabeceras_transportista, edificio, tracking_ref=f"ES{n:03d}") for n in range(10))
     )
