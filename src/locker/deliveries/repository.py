@@ -2,17 +2,33 @@
 import uuid
 from typing import Protocol
 
-from sqlalchemy import insert
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.deliveries.exceptions import DuplicatePackageError
 from locker.deliveries.models import DeliveryModel
 from locker.deliveries.schemas import Delivery, ReservationIn
+from locker.lockers.models import LockerModel
 from locker.lockers.schemas import Locker
 
 # Código SQLSTATE de PostgreSQL para una fila que incumple una restricción de unicidad
 UNIQUE_VIOLATION = "23505"
+
+# Columnas de la entrega tal como la ve la API (§8.4): las de deliveries más el edificio, la etiqueta y la talla
+# de su taquilla, que salen de unir con lockers. Las comparten la consulta y los UPDATE ... RETURNING
+DELIVERY_COLUMNS = (
+    DeliveryModel.id,
+    DeliveryModel.status,
+    LockerModel.building_id,
+    LockerModel.label.label("locker_label"),
+    LockerModel.size,
+    DeliveryModel.carrier,
+    DeliveryModel.tracking_ref,
+    DeliveryModel.recipient,
+    DeliveryModel.deposited_at,
+    DeliveryModel.picked_up_at,
+)
 
 
 class DeliveryRepository(Protocol):
@@ -84,9 +100,53 @@ class SqlDeliveryRepository:
         )
 
     async def get(self, delivery_id: uuid.UUID, carrier: str | None = None) -> Delivery | None:
-        """Lee la entrega, unida a su taquilla."""
-        raise NotImplementedError
+        """
+        Lee la entrega unida a su taquilla. Con carrier, el filtro va en la propia consulta: la entrega de otro
+        transportista no se encuentra, igual que una que no existe. Sin carrier (recoger), se busca solo por id
+        """
+        stmt = (
+            select(*DELIVERY_COLUMNS)
+            .join(LockerModel, LockerModel.id == DeliveryModel.locker_id)
+            .where(DeliveryModel.id == delivery_id)
+        )
+        if carrier is not None:
+            stmt = stmt.where(DeliveryModel.carrier == carrier)
+
+        # Convierte la fila a un schema de Pydantic, o None si no hay ninguna
+        row = (await self._session.execute(stmt)).one_or_none()
+        return None if row is None else Delivery.model_validate(row, from_attributes=True)
 
     async def deposit(self, delivery_id: uuid.UUID, carrier: str) -> Delivery | None:
-        """UPDATE condicional de PENDING a DEPOSITED."""
-        raise NotImplementedError
+        """
+        Cambia el estado con un UPDATE condicional, sin leerlo antes en Python (I4):
+
+        UPDATE deliveries SET status = 'DEPOSITED', deposited_at = now()
+        FROM lockers
+        WHERE deliveries.id = :id AND deliveries.carrier = :carrier AND deliveries.status = 'PENDING'
+          AND lockers.id = deliveries.locker_id
+        RETURNING ...
+
+        Si otra transacción está cambiando la misma entrega, el UPDATE espera a que termine y vuelve a comprobar la
+        condición con la fila ya confirmada: de dos depósitos a la vez, solo uno cambia la fila
+        """
+
+        # Solo la entrega de este transportista y solo si está PENDING. La condición sobre lockers no filtra nada
+        # (toda entrega tiene su taquilla): une las dos tablas para que el RETURNING devuelva la entrega completa.
+        # deposited_at = now(): la hora la pone la base de datos.
+        # synchronize_session=False: no hace falta actualizar objetos en memoria, la fila se lee del RETURNING
+        stmt = (
+            update(DeliveryModel)
+            .where(
+                DeliveryModel.id == delivery_id,
+                DeliveryModel.carrier == carrier,
+                DeliveryModel.status == "PENDING",
+                LockerModel.id == DeliveryModel.locker_id,
+            )
+            .values(status="DEPOSITED", deposited_at=func.now())
+            .returning(*DELIVERY_COLUMNS)
+            .execution_options(synchronize_session=False)
+        )
+
+        # Una fila si ha cambiado la entrega; ninguna si no existe, es de otro o no estaba PENDING
+        row = (await self._session.execute(stmt)).one_or_none()
+        return None if row is None else Delivery.model_validate(row, from_attributes=True)

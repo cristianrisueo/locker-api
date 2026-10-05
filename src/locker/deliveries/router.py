@@ -1,4 +1,5 @@
-# Rutas de la API de entregas. De momento, solo reservar.
+# Rutas de la API de entregas: reservar y depositar.
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, status
@@ -44,3 +45,26 @@ async def reserve(
     # Una clave carrier siempre lleva name: lo exige la validación de la configuración al arrancar
     assert principal.name is not None
     return await service.reserve(principal.name, idempotency_key, body)
+
+
+@router.post(
+    "/{delivery_id}/deposit",
+    summary="Depositar el paquete en su taquilla",
+    responses={
+        404: {"description": "La entrega no existe o es de otro transportista"},
+        409: {"description": "La entrega ya se ha recogido"},
+    },
+)
+async def deposit(
+    delivery_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require_role("carrier"))],
+    service: DeliveryServiceDep,
+) -> Delivery:
+    """
+    El transportista dueño de la entrega deposita el paquete: la entrega pasa a DEPOSITED y se avisará al residente.
+    Sin cuerpo. Depositar otra vez una entrega ya depositada responde 200 con la entrega tal cual
+    """
+
+    # Una clave carrier siempre lleva name: lo exige la validación de la configuración al arrancar
+    assert principal.name is not None
+    return await service.deposit(principal.name, delivery_id)

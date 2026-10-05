@@ -1,8 +1,11 @@
-# Capa de servicio de entregas: reservar una taquilla para un paquete, con su clave de idempotencia.
+# Capa de servicio de entregas: reservar una taquilla para un paquete, con su clave de idempotencia, y depositarlo.
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.buildings.exceptions import BuildingNotFoundError
 from locker.buildings.repository import BuildingRepository
+from locker.deliveries.exceptions import DeliveryNotFoundError, InvalidStateError
 from locker.deliveries.repository import DeliveryRepository
 from locker.deliveries.schemas import Delivery, ReservationIn
 from locker.idempotency.exceptions import IdempotencyKeyReusedError
@@ -10,6 +13,8 @@ from locker.idempotency.fingerprint import fingerprint
 from locker.idempotency.repository import IdempotencyRepository
 from locker.lockers.exceptions import NoLockerAvailableError
 from locker.lockers.repository import LockerRepository
+from locker.outbox.events import DELIVERY_DEPOSITED, delivery_deposited
+from locker.outbox.repository import OutboxRepository
 
 
 class DeliveryService:
@@ -20,16 +25,18 @@ class DeliveryService:
         lockers: LockerRepository,
         buildings: BuildingRepository,
         idempotency: IdempotencyRepository,
+        outbox: OutboxRepository,
     ) -> None:
         """
-        Recibe la sesión de la petición (para abrir la transacción) y los repositorios que la usan:
-        el de entregas, el de taquillas, el de edificios y el de claves de idempotencia, que comparten esa misma sesión
+        Recibe la sesión de la petición (para abrir la transacción) y los repositorios que la usan: el de entregas,
+        el de taquillas, el de edificios, el de claves de idempotencia y el del outbox, que comparten esa misma sesión
         """
         self._session = session
         self._deliveries = deliveries
         self._lockers = lockers
         self._buildings = buildings
         self._idempotency = idempotency
+        self._outbox = outbox
 
     async def reserve(self, carrier: str, idempotency_key: str, data: ReservationIn) -> Delivery:
         """
@@ -69,3 +76,31 @@ class DeliveryService:
             # 6. Guarda la respuesta en la clave: es lo que recibirá un reintento, aunque la entrega cambie después
             await self._idempotency.save_response(carrier, idempotency_key, delivery.model_dump(mode="json"))
             return delivery
+
+    async def deposit(self, carrier: str, delivery_id: uuid.UUID) -> Delivery:
+        """
+        El transportista deposita el paquete: la entrega pasa de PENDING a DEPOSITED y se apunta el evento que
+        avisará al residente. Los dos en una transacción (I6): no existe un depósito sin evento ni un evento sin
+        depósito. Depositar otra vez una entrega ya depositada la devuelve tal cual, sin un segundo evento
+        """
+
+        # Crea la transacción: al salir del bloque se confirma, y si hay un error se deshace
+        async with self._session.begin():
+            # 1. Pasa la entrega a DEPOSITED solo si es de este transportista y está PENDING, en una sola sentencia
+            delivery = await self._deliveries.deposit(delivery_id, carrier)
+
+            # 2. Si ha cambiado, apunta el evento en esta misma transacción
+            if delivery is not None:
+                await self._outbox.add(DELIVERY_DEPOSITED, delivery_deposited(delivery.id))
+                return delivery
+
+            # 3. No ha cambiado ninguna fila: se lee la entrega del mismo transportista para saber por qué.
+            # No existe, o es de otro -> 404, sin revelar que existe
+            current = await self._deliveries.get(delivery_id, carrier)
+            if current is None:
+                raise DeliveryNotFoundError(delivery_id)
+
+            # Ya recogida -> 409. Si no, ya estaba DEPOSITED (un reintento): se devuelve tal cual, sin otro evento
+            if current.status == "PICKED_UP":
+                raise InvalidStateError
+            return current

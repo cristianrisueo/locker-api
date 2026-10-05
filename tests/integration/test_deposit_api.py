@@ -4,7 +4,6 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -36,7 +35,6 @@ async def reservar_una(crear_edificio: CrearEdificio, reservar: Reservar, cabece
     return reserva
 
 
-@pytest.mark.xfail(strict=True, reason="depositar todavía no existe")
 async def test_depositar_pasa_la_entrega_a_deposited(
     session: AsyncSession,
     client: AsyncClient,
@@ -63,7 +61,6 @@ async def test_depositar_pasa_la_entrega_a_deposited(
     assert await session.scalar(text("SELECT status FROM lockers")) == "BUSY"
 
 
-@pytest.mark.xfail(strict=True, reason="depositar todavía no existe")
 async def test_depositar_apunta_el_evento_delivery_deposited_en_la_misma_transaccion(
     session: AsyncSession,
     client: AsyncClient,
@@ -94,7 +91,6 @@ async def test_depositar_apunta_el_evento_delivery_deposited_en_la_misma_transac
     assert evento["id"].version == 7
 
 
-@pytest.mark.xfail(strict=True, reason="depositar todavía no existe")
 async def test_depositar_dos_veces_devuelve_200_y_un_solo_evento(
     session: AsyncSession,
     client: AsyncClient,
@@ -117,7 +113,6 @@ async def test_depositar_dos_veces_devuelve_200_y_un_solo_evento(
     assert [evento["payload"] for evento in await eventos(session)] == [{"delivery_id": reserva["id"]}]
 
 
-@pytest.mark.xfail(strict=True, reason="depositar todavía no existe")
 async def test_un_deposito_que_espera_a_otro_en_curso_no_apunta_un_segundo_evento(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -159,7 +154,6 @@ async def test_un_deposito_que_espera_a_otro_en_curso_no_apunta_un_segundo_event
     assert [evento["payload"] for evento in await eventos(session)] == [{"delivery_id": reserva["id"]}]
 
 
-@pytest.mark.xfail(strict=True, reason="depositar todavía no existe")
 async def test_depositar_una_entrega_ajena_devuelve_404_y_no_la_cambia(
     session: AsyncSession,
     client: AsyncClient,
@@ -182,7 +176,6 @@ async def test_depositar_una_entrega_ajena_devuelve_404_y_no_la_cambia(
     assert await eventos(session) == []
 
 
-@pytest.mark.xfail(strict=True, reason="depositar todavía no existe")
 async def test_depositar_una_entrega_inexistente_devuelve_404(
     client: AsyncClient, cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -195,7 +188,6 @@ async def test_depositar_una_entrega_inexistente_devuelve_404(
     assert respuesta.json() == {"code": "NOT_FOUND", "detail": f"Entrega {entrega} no encontrada"}
 
 
-@pytest.mark.xfail(strict=True, reason="depositar todavía no existe")
 async def test_depositar_una_entrega_recogida_devuelve_409(
     session: AsyncSession,
     client: AsyncClient,
@@ -224,7 +216,6 @@ async def test_depositar_una_entrega_recogida_devuelve_409(
     assert await eventos(session) == []
 
 
-@pytest.mark.xfail(strict=True, reason="depositar todavía no existe")
 async def test_el_operador_no_puede_depositar(
     session: AsyncSession,
     client: AsyncClient,
