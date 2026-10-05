@@ -50,14 +50,15 @@ app.add_middleware(RequestIdMiddleware)
 @app.get("/health", responses={503: {"description": "La base de datos no responde"}})
 async def health(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[str, str]:
     """
-    Salud: la API responde y llega a la base de datos. Si no, 503.
+    Comprueba si la API responde y llega a la base de datos. Si no, devuelve 503.
     Un único endpoint sirve de comprobación de vida y de disponibilidad (no hay /health/ready)
     """
+
+    # Si la base de datos tarda más de 2 segundos, se da por caída. Comprueba conexiones rechazadas y timeouts.
     try:
-        # Si la base de datos tarda más de 2 segundos, se da por caída
         async with asyncio.timeout(2):
             await session.execute(text("SELECT 1"))
-    # OSError cubre la conexión rechazada (asyncpg no siempre la envuelve) y TimeoutError
     except (SQLAlchemyError, OSError) as exc:
         raise ServiceUnavailableError("Base de datos no disponible") from exc
+
     return {"status": "ok"}

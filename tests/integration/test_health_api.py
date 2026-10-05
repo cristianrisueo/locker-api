@@ -1,4 +1,4 @@
-# Salud: /health comprueba de verdad la conexión con la base de datos.
+# Test de salud, comprueba que devuelve 200 con la base de datos disponible y 503 si no puede conectarse.
 from collections.abc import AsyncIterator
 
 from httpx import AsyncClient

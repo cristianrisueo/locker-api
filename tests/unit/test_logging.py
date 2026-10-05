@@ -1,4 +1,4 @@
-# Logs en JSON: el formateador escribe una línea JSON válida con los campos comunes y los extra.
+# Comprueba los logs en JSON: el formateador escribe una línea JSON válida con los campos comunes y los extra.
 import json
 import logging
 from datetime import datetime, timedelta

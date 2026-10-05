@@ -1,4 +1,4 @@
-# Smoke: comprobación mínima tras desplegar. No escribe nada, así que es seguro contra cualquier entorno.
+# Smoke test: Comprueba que cada réplica de la API responde y llega a la base de datos.
 import httpx
 
 

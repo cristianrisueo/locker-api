@@ -1,5 +1,4 @@
-# Traducción de errores a HTTP con la forma {code, detail}, sobre una app en memoria.
-# Todavía no hay dominios que lancen estos errores: este es el único nivel donde se pueden probar todas las familias.
+# Comprueba la traducción de errores a HTTP con la forma {code, detail}, sobre una app en memoria.
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient

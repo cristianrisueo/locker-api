@@ -1,4 +1,5 @@
-# Logs en JSON: una línea por registro, con el identificador de la petición en curso.
+# Logs en JSON: Convierte cada registro en un objeto JSON y lo envía a la salida estándar.
+# Es decir, formatea los logs de API, Worker y Uvicorn en JSON. Esto hace que se puedan filtrar facilmente.
 # configure_logging lo llaman el lifespan de la API y, más adelante, el worker.
 import json
 import logging

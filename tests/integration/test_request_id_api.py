@@ -1,4 +1,4 @@
-# Identificador de petición: toda respuesta lo lleva en X-Request-ID, y es distinto en cada petición.
+# Comprueba el identificador de una petición. Que toda respuesta lo lleva en X-Request-ID, y es distinto en cada petición.
 import uuid
 
 from httpx import AsyncClient

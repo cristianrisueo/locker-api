@@ -1,12 +1,14 @@
 # Integración continua: en cada push a main y en cada PR pasa las comprobaciones y los tests.
-# Los tests de integración usan testcontainers: el runner ubuntu-latest ya trae Docker.
+# Los tests de integración usan testcontainers. Los E2E no se ejecutan.
 name: CI
 
+# Al hacer un push a main o un PR
 on:
   push:
     branches: [main]
   pull_request:
 
+# Solo permite lecturas del repositorio
 permissions:
   contents: read
 
@@ -15,6 +17,7 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# El job de CI se ejecuta en un contenedor Ubuntu, instala uv y las dependencias exactas de uv.lock, y ejecuta make check y make test.
 jobs:
   check-and-test:
     runs-on: ubuntu-latest
@@ -26,12 +29,10 @@ jobs:
         with:
           enable-cache: true
 
-      # uv instala el Python de .python-version y las dependencias exactas de uv.lock
       - run: uv sync --locked
 
       - run: make check
 
-      # make check formatea en vez de fallar: si ha cambiado algo, el código no venía formateado
       - run: git diff --exit-code
 
       - run: make test
