@@ -33,6 +33,9 @@ CLAVE_OPERADOR = "test-operator-key-000000000"
 CLAVE_SEUR = "test-seur-key-0000000000000"
 CLAVE_CORREOS = "test-correos-key-00000000000"
 
+# Secreto del código de recogida de los tests (mínimo 32 caracteres). Los tests calculan el código con él
+SECRETO_RECOGIDA = "test-pickup-secret-00000000000000"
+
 
 def restriccion_violada(error: IntegrityError) -> tuple[str | None, str | None]:
     """
@@ -125,6 +128,7 @@ def settings(database_url: str) -> Settings:
             ApiKey(key=SecretStr(CLAVE_SEUR), role="carrier", name="SEUR"),
             ApiKey(key=SecretStr(CLAVE_CORREOS), role="carrier", name="Correos Express"),
         ],
+        pickup_code_secret=SecretStr(SECRETO_RECOGIDA),
         _env_file=None,
     )
 

@@ -24,8 +24,8 @@ from locker.lockers.router import router as lockers_router
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """
     Ciclo de vida de la app: lo anterior al yield se ejecuta al arrancar y lo posterior al apagar.
-    Al arrancar: lee la configuración (si falta DATABASE_URL o API_KEYS, o API_KEYS no es válida, la app no
-    arranca), configura los logs en JSON y crea el pool.
+    Al arrancar: lee la configuración (si falta DATABASE_URL, API_KEYS o PICKUP_CODE_SECRET, o alguna no es
+    válida, la app no arranca), configura los logs en JSON y crea el pool.
     Al apagar: cierra las conexiones del pool de forma ordenada.
     """
     settings = get_settings()
