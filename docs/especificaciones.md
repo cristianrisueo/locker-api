@@ -108,7 +108,8 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A16 | `recipient` es texto libre, sin validar su formato                                 | No hay «mis entregas» por residente                                                            |
 | A17 | La instalación inicial no admite `country` en `buildings`                          | Se añade en F3 con una migración con datos, a propósito (§5.8)                                 |
 | A18 | La API no se despliega y las claves son de desarrollo                              | Los valores de `.env.example` no son secretos reales                                           |
-| A19 | Las rutas inexistentes (404), los métodos no permitidos (405) y los errores internos (500) conservan el formato por defecto de FastAPI; un 500 no lleva `X-Request-ID` | No están en el catálogo (§8.3); el contrato de `/v1` solo cubre las operaciones definidas |
+| A19 | Las rutas inexistentes (404) y los métodos no permitidos (405) devuelven el JSON por defecto de FastAPI (`{"detail": ...}`); un error interno no controlado (500) devuelve el texto plano `Internal Server Error`, sin `X-Request-ID` | No están en el catálogo (§8.3); el contrato de `/v1` solo cubre las operaciones definidas. El traceback de un 500 se registra con `request_id` nulo, así que no se puede asociar a una petición |
+| A20 | Una reserva puede recibir `NO_LOCKER_AVAILABLE` aunque haya una taquilla que va a quedar libre: `SKIP LOCKED` salta las taquillas que otra reserva en curso tiene bloqueadas | Si otra reserva retiene la única taquilla libre de esa talla y después se deshace (por ejemplo, con `DUPLICATE_PACKAGE`), esta recibe el `409` aunque la taquilla vuelva a estar libre. Complementa a A10. El cliente puede reintentar; desde F3 es seguro con la misma `Idempotency-Key`, porque una reserva fallida no la guarda (I8) |
 
 ---
 
@@ -272,8 +273,8 @@ nombra el objeto de base de datos que la sostiene cuando lo hay. Las revisiones 
   en tiempo constante (`hmac.compare_digest`).
 - **I10.** Todo error de un endpoint de la API tiene la forma `{"code": "...", "detail": "..."}` y nunca expone SQL,
   trazas ni mensajes del driver. Solo se devuelven los códigos del catálogo de §8.3. Excepción conocida: las rutas
-  inexistentes (404), los métodos no permitidos (405) y los errores internos no controlados (500) conservan el
-  formato por defecto de FastAPI (A19).
+  inexistentes (404) y los métodos no permitidos (405) conservan el JSON por defecto de FastAPI, y un error interno
+  no controlado (500) devuelve texto plano (A19).
 - **I11.** El esquema solo cambia con migraciones de Alembic. Una migración ya fusionada en `main` no se edita.
 - **I12.** El alta de taquillas calcula la etiqueta con la fila del edificio bloqueada (`FOR UPDATE`) y en la misma
   transacción que inserta las taquillas.
@@ -535,7 +536,7 @@ Todas bajo `/v1`, salvo `/health`.
 | ------ | -------------------------------------- | ------------------------- | ----- | ---------------------------- |
 | POST   | `/v1/buildings`                        | operador                  | 201   | 401, 403, 422                |
 | POST   | `/v1/buildings/{building_id}/lockers`  | operador                  | 201   | 401, 403, 404, 422           |
-| GET    | `/v1/buildings/{building_id}/capacity` | operador, transportista   | 200   | 401, 403, 404, 422           |
+| GET    | `/v1/buildings/{building_id}/capacity` | operador, transportista   | 200   | 401, 404, 422                |
 | POST   | `/v1/deliveries`                       | transportista             | 201   | 401, 403, 404, 409, 422      |
 | POST   | `/v1/deliveries/{delivery_id}/deposit` | transportista dueño       | 200   | 401, 403, 404, 409, 422      |
 | GET    | `/v1/deliveries/{delivery_id}`         | transportista dueño       | 200   | 401, 403, 404, 422           |
@@ -871,3 +872,4 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | ---------- | --------------------- | ------------------------------------------------------- | -------- |
 | 2026-10-04 | Primera versión       | Cierre de las 13 decisiones de diseño                   | —        |
 | 2026-10-05 | I10, A19 y §11        | Revisión de F0: contradicción detectada por Claude Code y familias sin código propio | — |
+| 2026-10-05 | A19, A20, I10 y §8.2  | Revisión de F2: el 500 es texto plano; el falso `409` por `SKIP LOCKED`; la capacidad no puede dar `403` | — |
