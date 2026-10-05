@@ -2,7 +2,6 @@
 import uuid
 from collections.abc import Awaitable, Callable
 
-import pytest
 from httpx import Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +25,6 @@ async def entregas(session: AsyncSession) -> list[tuple[str, str, str, str]]:
     return [(str(fila.id), fila.carrier, fila.tracking_ref, fila.status) for fila in filas]
 
 
-@pytest.mark.xfail(strict=True, reason="F2: reservar todavía no está implementado")
 async def test_reservar_asigna_una_taquilla_libre_de_la_talla_pedida(
     session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
 ) -> None:

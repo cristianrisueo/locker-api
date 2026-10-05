@@ -2,7 +2,7 @@
 import uuid
 from typing import Protocol
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.lockers.models import LockerModel
@@ -76,4 +76,43 @@ class SqlLockerRepository:
         return [SizeCapacity.model_validate(row, from_attributes=True) for row in rows]
 
     async def allocate(self, building_id: uuid.UUID, size: Size) -> Locker | None:
-        raise NotImplementedError
+        """
+        Asigna una taquilla en UNA sola sentencia (I3): busca la candidata y la ocupa a la vez, sin un SELECT
+        previo seguido de un UPDATE (entre los dos, otra reserva podría quedarse con la misma taquilla).
+
+        WITH candidata AS (
+            SELECT id FROM lockers
+            WHERE building_id = :building_id AND size = :size AND status = 'FREE'
+            ORDER BY id LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE lockers SET status = 'BUSY' FROM candidata WHERE lockers.id = candidata.id
+        RETURNING lockers.*
+        """
+
+        # La candidata: la taquilla libre más antigua de esa talla (UUID v7: ordenar por id es ordenar por antigüedad).
+        # Solo la talla exacta: nunca se asigna una mayor.
+        # FOR UPDATE la bloquea hasta el final de la transacción; SKIP LOCKED salta las que ya tiene bloqueadas
+        # otra reserva en curso, en vez de esperarla: cada reserva simultánea se queda con una taquilla distinta
+        candidate = (
+            select(LockerModel.id)
+            .where(LockerModel.building_id == building_id, LockerModel.size == size, LockerModel.status == "FREE")
+            .order_by(LockerModel.id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+            .cte("candidata")
+        )
+
+        # El UPDATE ocupa la candidata y devuelve la fila ya ocupada. Si no hay candidata, no devuelve nada.
+        # synchronize_session=False: no hace falta actualizar objetos en memoria, la fila se lee del RETURNING
+        stmt = (
+            update(LockerModel)
+            .where(LockerModel.id == candidate.c.id)
+            .values(status="BUSY")
+            .returning(LockerModel)
+            .execution_options(synchronize_session=False)
+        )
+        model = await self._session.scalar(stmt)
+
+        # Convierte el modelo de SQLAlchemy a un schema de Pydantic, o None si no quedaba ninguna libre
+        return None if model is None else Locker.model_validate(model, from_attributes=True)

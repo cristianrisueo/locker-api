@@ -25,4 +25,17 @@ class DeliveryService:
         self._buildings = buildings
 
     async def reserve(self, carrier: str, data: ReservationIn) -> Delivery:
-        raise NotImplementedError
+        """
+        Reserva una taquilla de la talla pedida para el paquete del transportista y crea la entrega en PENDING.
+        Todo en una transacción: si algo falla, se deshace todo y la taquilla vuelve a quedar libre
+        """
+
+        # La transacción es lo primero del caso de uso (I5): al salir del bloque se confirma, y si hay un error se deshace
+        async with self._session.begin():
+            # 1. Ocupa una taquilla libre de esa talla, en una sola sentencia
+            locker = await self._lockers.allocate(data.building_id, data.size)
+            if locker is None:
+                raise NotImplementedError
+
+            # 2. Crea la entrega en la taquilla asignada
+            return await self._deliveries.add(locker, carrier, data)
