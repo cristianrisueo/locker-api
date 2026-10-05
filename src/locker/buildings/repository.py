@@ -18,6 +18,9 @@ class BuildingRepository(Protocol):
     # Bloquea la fila del edificio hasta que acabe la transacción. Devuelve False si no existe
     async def lock(self, building_id: uuid.UUID) -> bool: ...
 
+    # Dice si el edificio existe, sin bloquear nada
+    async def exists(self, building_id: uuid.UUID) -> bool: ...
+
 
 class SqlBuildingRepository:
     """Implementación sobre PostgreSQL con SQLAlchemy. Nunca hace commit ni rollback: eso es cosa del servicio."""
@@ -49,3 +52,7 @@ class SqlBuildingRepository:
         # Solo hace falta el id: lo que importa es el bloqueo, no los datos del edificio
         stmt = select(BuildingModel.id).where(BuildingModel.id == building_id).with_for_update()
         return await self._session.scalar(stmt) is not None
+
+    async def exists(self, building_id: uuid.UUID) -> bool:
+        """Dice si el edificio existe. Es una lectura normal: no bloquea la fila."""
+        raise NotImplementedError

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from locker.buildings.exceptions import BuildingNotFoundError
 from locker.buildings.repository import BuildingRepository
 from locker.lockers.repository import LockerRepository
-from locker.lockers.schemas import LockersCreated, LockersIn, Size
+from locker.lockers.schemas import Capacity, LockersCreated, LockersIn, Size
 
 
 def make_label(size: Size, number: int) -> str:
@@ -46,3 +46,7 @@ class LockerService:
             lockers = await self._lockers.add_many(building_id, data.size, labels)
 
         return LockersCreated(lockers=lockers)
+
+    async def capacity(self, building_id: uuid.UUID) -> Capacity:
+        """Capacidad del edificio por talla, en orden S, M, L. Si el edificio no existe, 404."""
+        raise NotImplementedError

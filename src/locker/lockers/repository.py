@@ -6,7 +6,7 @@ from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.lockers.models import LockerModel
-from locker.lockers.schemas import Locker, Size
+from locker.lockers.schemas import Locker, Size, SizeCapacity
 
 
 class LockerRepository(Protocol):
@@ -17,6 +17,9 @@ class LockerRepository(Protocol):
 
     # Inserta una taquilla libre por etiqueta y las devuelve en el mismo orden
     async def add_many(self, building_id: uuid.UUID, size: Size, labels: list[str]) -> list[Locker]: ...
+
+    # Total y libres de cada talla del edificio, sin un orden concreto. Solo aparecen las tallas que existen
+    async def capacity(self, building_id: uuid.UUID) -> list[SizeCapacity]: ...
 
 
 class SqlLockerRepository:
@@ -48,3 +51,7 @@ class SqlLockerRepository:
 
         # Convierte los modelos de SQLAlchemy a schemas de Pydantic para devolverlos
         return [Locker.model_validate(model, from_attributes=True) for model in models]
+
+    async def capacity(self, building_id: uuid.UUID) -> list[SizeCapacity]:
+        """Una sola consulta agrupada por talla que cuenta a la vez el total y las libres."""
+        raise NotImplementedError

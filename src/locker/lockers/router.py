@@ -26,8 +26,9 @@ async def create_lockers(building_id: uuid.UUID, body: LockersIn, service: Locke
 @router.get(
     "/capacity",
     summary="Consultar la capacidad",
+    responses={404: {"description": "El edificio no existe"}},
     dependencies=[Depends(require_role("operator", "carrier"))],
 )
-async def get_capacity(building_id: uuid.UUID) -> Capacity:
-    """Devuelve cuántas taquillas hay y cuántas están libres, por talla."""
-    raise NotImplementedError
+async def get_capacity(building_id: uuid.UUID, service: LockerServiceDep) -> Capacity:
+    """Devuelve cuántas taquillas hay y cuántas están libres, por talla (operador o transportista)."""
+    return await service.capacity(building_id)
