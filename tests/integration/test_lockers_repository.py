@@ -11,18 +11,10 @@ from locker.buildings.repository import SqlBuildingRepository
 from locker.buildings.schemas import BuildingIn
 from locker.lockers.repository import SqlLockerRepository
 from locker.lockers.schemas import Size
+from tests.integration.conftest import restriccion_violada
 
 # Código SQLSTATE de PostgreSQL para una fila que incumple un CHECK
 CHECK_VIOLATION = "23514"
-
-
-def restriccion_violada(error: IntegrityError) -> tuple[str | None, str | None]:
-    """
-    (SQLSTATE, nombre de la restricción) de un IntegrityError. exc.orig es el error del driver adaptado por
-    SQLAlchemy (lleva el sqlstate) y su causa es la excepción de asyncpg (lleva constraint_name)
-    """
-    original = error.orig
-    return getattr(original, "sqlstate", None), getattr(original and original.__cause__, "constraint_name", None)
 
 
 async def test_check_de_size_rechaza_una_talla_invalida(session: AsyncSession) -> None:

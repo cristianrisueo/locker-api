@@ -16,6 +16,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from pydantic import SecretStr
 from sqlalchemy import make_url, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.community.postgres import PostgresContainer
 
@@ -31,6 +32,15 @@ ROOT = Path(__file__).resolve().parents[2]
 CLAVE_OPERADOR = "test-operator-key-000000000"
 CLAVE_SEUR = "test-seur-key-0000000000000"
 CLAVE_CORREOS = "test-correos-key-00000000000"
+
+
+def restriccion_violada(error: IntegrityError) -> tuple[str | None, str | None]:
+    """
+    (SQLSTATE, nombre de la restricción) de un IntegrityError, para los tests de repositorio. exc.orig es el error
+    del driver adaptado por SQLAlchemy (lleva el sqlstate) y su causa es la excepción de asyncpg (lleva constraint_name)
+    """
+    original = error.orig
+    return getattr(original, "sqlstate", None), getattr(original and original.__cause__, "constraint_name", None)
 
 
 class AlembicRunner(Protocol):

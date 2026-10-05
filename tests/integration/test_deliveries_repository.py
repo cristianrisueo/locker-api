@@ -11,18 +11,10 @@ from locker.buildings.repository import SqlBuildingRepository
 from locker.buildings.schemas import BuildingIn
 from locker.deliveries.models import DeliveryModel
 from locker.lockers.repository import SqlLockerRepository
+from tests.integration.conftest import restriccion_violada
 
 # Código SQLSTATE de PostgreSQL para una fila que incumple una restricción de unicidad
 UNIQUE_VIOLATION = "23505"
-
-
-def restriccion_violada(error: IntegrityError) -> tuple[str | None, str | None]:
-    """
-    (SQLSTATE, nombre de la restricción) de un IntegrityError. exc.orig es el error del driver adaptado por
-    SQLAlchemy (lleva el sqlstate) y su causa es la excepción de asyncpg (lleva constraint_name)
-    """
-    original = error.orig
-    return getattr(original, "sqlstate", None), getattr(original and original.__cause__, "constraint_name", None)
 
 
 async def crear_taquillas(session: AsyncSession, cuantas: int) -> list[uuid.UUID]:
