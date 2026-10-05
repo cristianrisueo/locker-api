@@ -1,14 +1,18 @@
 # Punto de entrada de la aplicación FastAPI.
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.core.config import get_settings
 from locker.core.database import create_engine, create_session_factory, get_session
 from locker.core.exception_handlers import register_exception_handlers
+from locker.core.exceptions import ServiceUnavailableError
 
 
 @asynccontextmanager
@@ -36,7 +40,17 @@ app = FastAPI(title="Locker API", lifespan=lifespan)
 register_exception_handlers(app)
 
 
-@app.get("/health")
+@app.get("/health", responses={503: {"description": "La base de datos no responde"}})
 async def health(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[str, str]:
-    """Salud: la API responde y llega a la base de datos. Si no, 503."""
-    raise NotImplementedError
+    """
+    Salud: la API responde y llega a la base de datos. Si no, 503.
+    Un único endpoint sirve de comprobación de vida y de disponibilidad (no hay /health/ready)
+    """
+    try:
+        # Si la base de datos tarda más de 2 segundos, se da por caída
+        async with asyncio.timeout(2):
+            await session.execute(text("SELECT 1"))
+    # OSError cubre la conexión rechazada (asyncpg no siempre la envuelve) y TimeoutError
+    except (SQLAlchemyError, OSError) as exc:
+        raise ServiceUnavailableError("Base de datos no disponible") from exc
+    return {"status": "ok"}

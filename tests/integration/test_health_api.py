@@ -1,7 +1,6 @@
 # Salud: /health comprueba de verdad la conexión con la base de datos.
 from collections.abc import AsyncIterator
 
-import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +12,6 @@ from locker.main import app
 URL_INALCANZABLE = "postgresql+asyncpg://x:x@127.0.0.1:1/x"
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="Falta el endpoint /health")
 async def test_health_devuelve_200_con_bd(client: AsyncClient) -> None:
     """«[F0-01]» Con Postgres disponible, /health ejecuta SELECT 1 y responde 200."""
     respuesta = await client.get("/health")
@@ -22,7 +20,6 @@ async def test_health_devuelve_200_con_bd(client: AsyncClient) -> None:
     assert respuesta.json() == {"status": "ok"}
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="Falta el endpoint /health")
 async def test_health_devuelve_503_sin_bd(client: AsyncClient) -> None:
     """
     «[F0-02]» Si la base de datos no responde, /health da 503 SERVICE_UNAVAILABLE con la forma de error común:
