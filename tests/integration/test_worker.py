@@ -23,7 +23,6 @@ async def cuantos_eventos(session: AsyncSession) -> int:
     return cuantos
 
 
-@pytest.mark.xfail(strict=True, reason="F5-11: falta el bucle del worker")
 async def test_el_worker_se_detiene_al_pedirlo_sin_esperar_a_la_pausa(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -54,7 +53,6 @@ async def test_el_worker_se_detiene_al_pedirlo_sin_esperar_a_la_pausa(
     assert notificador.recibidas == []
 
 
-@pytest.mark.xfail(strict=True, reason="F5-11: falta el bucle del worker")
 async def test_el_worker_sobrevive_a_un_error_inesperado_y_se_recupera(
     bd_migraciones: str,
     alembic: AlembicRunner,

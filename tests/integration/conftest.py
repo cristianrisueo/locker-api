@@ -22,10 +22,8 @@ from testcontainers.community.postgres import PostgresContainer
 
 from locker.core.config import ApiKey, DatabaseSettings, Settings, get_settings
 from locker.core.database import Base, create_engine, create_session_factory, get_session
-from locker.deliveries.repository import SqlDeliveryRepository
 from locker.main import app  # importar la app registra todos los modelos en Base.metadata
-from locker.outbox.repository import SqlOutboxRepository
-from locker.outbox.service import OutboxService
+from locker.outbox.worker import process_one
 from tests.integration.notificador_falso import NotificadorFalso
 
 # Raíz del repositorio, donde está alembic.ini
@@ -341,16 +339,12 @@ def procesar(
     session_factory: async_sessionmaker[AsyncSession], notificador: NotificadorFalso, ajustes_outbox: Settings
 ) -> Procesar:
     """
-    Llama a process_next como lo hace el worker: con una sesión nueva en cada pasada, los repositorios de
-    PostgreSQL y el NotificadorFalso del test
+    Llama a process_next como lo hace el worker (con su process_one): una sesión nueva en cada pasada y los
+    repositorios de PostgreSQL. Solo cambia el notificador, que es el NotificadorFalso del test
     """
 
     async def una_pasada(ajustes: Settings | None = None) -> bool:
-        async with session_factory() as s:
-            servicio = OutboxService(
-                s, SqlOutboxRepository(s), SqlDeliveryRepository(s), notificador, ajustes or ajustes_outbox
-            )
-            return await servicio.process_next()
+        return await process_one(session_factory, notificador, ajustes or ajustes_outbox)
 
     return una_pasada
 

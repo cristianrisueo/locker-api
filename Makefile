@@ -1,5 +1,5 @@
 # Comandos del proyecto locker. Escribe "make" para ver la lista.
-.PHONY: help up stop down destroy psql migrate migration rollback run check test test-unit test-integration coverage e2e smoke
+.PHONY: help up stop down destroy psql migrate migration rollback run worker check test test-unit test-integration coverage e2e smoke
 
 help:  ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -37,6 +37,9 @@ rollback:  ## Deshace la última migración
 
 run:  ## Arranca la API con recarga automática
 	uv run uvicorn locker.main:app --reload
+
+worker:  ## Arranca el worker del outbox (se para con Ctrl-C)
+	uv run python -m locker.outbox.worker
 
 check:  ## Formatea, pasa el linter y comprueba los tipos
 	uv run ruff format . && uv run ruff check . && uv run mypy src tests
