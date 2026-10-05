@@ -16,6 +16,7 @@ from locker.core.exception_handlers import register_exception_handlers
 from locker.core.exceptions import ServiceUnavailableError
 from locker.core.logging import configure_logging
 from locker.core.middleware import RequestIdMiddleware
+from locker.deliveries.router import router as deliveries_router
 from locker.lockers.router import router as lockers_router
 
 
@@ -51,6 +52,7 @@ app.add_middleware(RequestIdMiddleware)
 # Añade los routers de los dominios bajo /v1 (versionado en la ruta). /health queda fuera: no es parte del contrato
 app.include_router(buildings_router, prefix="/v1")
 app.include_router(lockers_router, prefix="/v1")
+app.include_router(deliveries_router, prefix="/v1")
 
 
 @app.get("/health", responses={503: {"description": "La base de datos no responde"}})

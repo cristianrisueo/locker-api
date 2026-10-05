@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from pydantic import SecretStr
 from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # nunca dependen de la API_KEYS del entorno
 CLAVE_OPERADOR = "test-operator-key-000000000"
 CLAVE_SEUR = "test-seur-key-0000000000000"
+CLAVE_CORREOS = "test-correos-key-00000000000"
 
 
 class AlembicRunner(Protocol):
@@ -100,6 +101,7 @@ def settings(database_url: str) -> Settings:
         api_keys=[
             ApiKey(key=SecretStr(CLAVE_OPERADOR), role="operator"),
             ApiKey(key=SecretStr(CLAVE_SEUR), role="carrier", name="SEUR"),
+            ApiKey(key=SecretStr(CLAVE_CORREOS), role="carrier", name="Correos Express"),
         ],
         _env_file=None,
     )
@@ -115,6 +117,12 @@ def cabeceras_operador() -> dict[str, str]:
 def cabeceras_transportista() -> dict[str, str]:
     """Cabeceras de una petición del transportista SEUR."""
     return {"X-API-Key": CLAVE_SEUR}
+
+
+@pytest.fixture
+def cabeceras_correos() -> dict[str, str]:
+    """Cabeceras de una petición del transportista Correos Express: un segundo transportista distinto de SEUR."""
+    return {"X-API-Key": CLAVE_CORREOS}
 
 
 @pytest.fixture(autouse=True)
@@ -163,6 +171,59 @@ async def client(session_factory: async_sessionmaker[AsyncSession], settings: Se
         yield c
     app.dependency_overrides.pop(get_session)
     app.dependency_overrides.pop(get_settings)
+
+
+class CrearEdificio(Protocol):
+    """Crea un edificio con taquillas por la API: await crear_edificio({"M": 2, "S": 1}) devuelve su id."""
+
+    async def __call__(self, taquillas: dict[str, int]) -> str: ...
+
+
+@pytest.fixture
+def crear_edificio(client: AsyncClient, cabeceras_operador: dict[str, str]) -> CrearEdificio:
+    """Ayudante para preparar un edificio con taquillas, como lo haría el operador."""
+
+    async def crear(taquillas: dict[str, int]) -> str:
+        respuesta = await client.post("/v1/buildings", json={"name": "Edificio Sol"}, headers=cabeceras_operador)
+        assert respuesta.status_code == 201
+        edificio: str = respuesta.json()["id"]
+        for talla, cuantas in taquillas.items():
+            cuerpo = {"size": talla, "quantity": cuantas}
+            respuesta = await client.post(f"/v1/buildings/{edificio}/lockers", json=cuerpo, headers=cabeceras_operador)
+            assert respuesta.status_code == 201
+        return edificio
+
+    return crear
+
+
+class Reservar(Protocol):
+    """Reserva por la API: await reservar(cabeceras, edificio, size="M", tracking_ref="ES123")."""
+
+    async def __call__(
+        self,
+        cabeceras: dict[str, str],
+        building_id: str,
+        size: str = "M",
+        tracking_ref: str = "ES123",
+        recipient: str = "vecino@example.com",
+    ) -> Response: ...
+
+
+@pytest.fixture
+def reservar(client: AsyncClient) -> Reservar:
+    """Ayudante para lanzar una reserva y devolver la respuesta tal cual, sin comprobar nada."""
+
+    async def lanzar(
+        cabeceras: dict[str, str],
+        building_id: str,
+        size: str = "M",
+        tracking_ref: str = "ES123",
+        recipient: str = "vecino@example.com",
+    ) -> Response:
+        cuerpo = {"building_id": building_id, "size": size, "tracking_ref": tracking_ref, "recipient": recipient}
+        return await client.post("/v1/deliveries", json=cuerpo, headers=cabeceras)
+
+    return lanzar
 
 
 @pytest.fixture

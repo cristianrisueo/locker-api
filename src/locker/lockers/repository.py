@@ -21,6 +21,9 @@ class LockerRepository(Protocol):
     # Total y libres de cada talla del edificio, sin un orden concreto. Solo aparecen las tallas que existen
     async def capacity(self, building_id: uuid.UUID) -> list[SizeCapacity]: ...
 
+    # Ocupa una taquilla libre de esa talla y la devuelve ya BUSY. None si no queda ninguna libre
+    async def allocate(self, building_id: uuid.UUID, size: Size) -> Locker | None: ...
+
 
 class SqlLockerRepository:
     """Implementación sobre PostgreSQL con SQLAlchemy. Nunca hace commit ni rollback: eso es cosa del servicio."""
@@ -71,3 +74,6 @@ class SqlLockerRepository:
 
         # Convierte cada fila (size, total, free) a un schema de Pydantic
         return [SizeCapacity.model_validate(row, from_attributes=True) for row in rows]
+
+    async def allocate(self, building_id: uuid.UUID, size: Size) -> Locker | None:
+        raise NotImplementedError
