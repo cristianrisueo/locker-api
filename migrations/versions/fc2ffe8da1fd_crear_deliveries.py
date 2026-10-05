@@ -33,12 +33,14 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=10), server_default="PENDING", nullable=False),
         sa.Column("deposited_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("picked_up_at", sa.DateTime(timezone=True), nullable=True),
-        # Estados válidos
+        # Estados válidos: PENDING, DEPOSITED o PICKED_UP
         sa.CheckConstraint("status IN ('PENDING', 'DEPOSITED', 'PICKED_UP')", name=op.f("ck_deliveries_status")),
+        # FK hacia lockers.id: fk_deliveries_locker_id_lockers
         sa.ForeignKeyConstraint(["locker_id"], ["lockers.id"], name=op.f("fk_deliveries_locker_id_lockers")),
         sa.PrimaryKeyConstraint("id"),
     )
-    # Una taquilla nunca tiene dos entregas activas (I1). Las recogidas no cuentan: la taquilla se reutiliza
+
+    # Índice parcial, para que una taquilla nunca tenga dos entregas activas (PENDING o DEPOSITED)
     op.create_index(
         "uq_deliveries_active_locker",
         "deliveries",
@@ -46,7 +48,7 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text(ACTIVE),
     )
-    # Un paquete (transportista + referencia) nunca tiene dos entregas activas (I2)
+    # Índice parcial, para que un paquete (carrier + tracking_ref) nunca tenga dos entregas activas (PENDING o DEPOSITED)
     op.create_index(
         "uq_deliveries_active_package",
         "deliveries",

@@ -77,7 +77,7 @@ class SqlLockerRepository:
 
     async def allocate(self, building_id: uuid.UUID, size: Size) -> Locker | None:
         """
-        Asigna una taquilla en UNA sola sentencia (I3): busca la candidata y la ocupa a la vez, sin un SELECT
+        Asigna una taquilla en UNA sola sentencia: busca la candidata y la ocupa a la vez, sin un SELECT
         previo seguido de un UPDATE (entre los dos, otra reserva podría quedarse con la misma taquilla).
 
         WITH candidata AS (

@@ -20,8 +20,8 @@ class DeliveryModel(Base):
 
     # Restricciones de la tabla.
     # Estados válidos de una entrega
-    # Índice único parcial: una taquilla nunca tiene dos entregas activas (I1)
-    # Índice único parcial: un paquete (transportista + referencia) nunca tiene dos entregas activas (I2).
+    # Índice único parcial: una taquilla nunca tiene dos entregas activas
+    # Índice único parcial: un paquete (transportista + referencia) nunca tiene dos entregas activas
     # Son parciales (solo las filas activas) para que las entregas ya recogidas no impidan reutilizar la taquilla
     # ni volver a enviar el mismo paquete
     __table_args__ = (

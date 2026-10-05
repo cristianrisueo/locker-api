@@ -17,6 +17,7 @@ class ReservationIn(BaseModel):
     # Rechaza campos desconocidos (por ejemplo, un carrier en el cuerpo) y quita los espacios sobrantes de los extremos
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    # ID del edificio, talla de taquilla, referencia del paquete y a quién se avisa. Todos obligatorios
     building_id: uuid.UUID = Field(description="Edificio donde se reserva")
     size: Size = Field(description="Talla de taquilla que se necesita", examples=["M"])
     tracking_ref: str = Field(min_length=1, max_length=64, description="Referencia del paquete", examples=["ES123"])
