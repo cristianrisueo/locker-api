@@ -2,6 +2,7 @@
 # El notificador es el NotificadorFalso (§14.3); todo lo demás es real.
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -12,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from locker.core.config import Settings
 from locker.core.logging import JsonFormatter
 from locker.deliveries.pickup_code import derive
+from locker.outbox.events import DELIVERY_DEPOSITED, delivery_deposited
 from locker.outbox.notifier import Notification
+from locker.outbox.repository import SqlOutboxRepository
 from tests.integration.conftest import ROOT, SECRETO_RECOGIDA, Depositar, Procesar
 from tests.integration.notificador_falso import NotificadorFalso
 
@@ -201,3 +204,27 @@ async def test_un_aviso_que_falla_tras_enviarse_se_reenvia_con_el_mismo_event_id
     assert primero.event_id == evento["id"]
     assert segundo == primero
     assert await eventos(session) == []
+
+
+async def test_un_evento_sin_entrega_cuenta_como_fallo_y_no_bloquea_a_los_demas(
+    session: AsyncSession, procesar: Procesar, depositar: Depositar, notificador: NotificadorFalso
+) -> None:
+    """
+    «[F5-09]» Un evento cuya entrega no existe no se puede avisar: cuenta como fallo (attempts + 1), sin enviar nada.
+    No bloquea la cola: aunque es el más antiguo, la pasada siguiente procesa el evento de detrás.
+    """
+    # Un evento de una entrega que no existe, apuntado antes que el de una entrega real: es el más antiguo
+    async with session.begin():
+        await SqlOutboxRepository(session).add(DELIVERY_DEPOSITED, delivery_deposited(uuid.uuid7()))
+    [entrega] = await depositar()
+    huerfano, _ = await eventos(session)
+
+    # Primera pasada: toma el huérfano y falla
+    assert await procesar() is True
+    assert notificador.recibidas == []
+
+    # Segunda pasada: el evento de la entrega real se envía y se borra
+    assert await procesar() is True
+    assert [aviso.delivery_id for aviso in notificador.recibidas] == [entrega]
+    [fila] = await eventos(session)
+    assert (fila["id"], fila["attempts"]) == (huerfano["id"], 1)
