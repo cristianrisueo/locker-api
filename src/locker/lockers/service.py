@@ -28,7 +28,7 @@ class LockerService:
     async def create(self, building_id: uuid.UUID, data: LockersIn) -> LockersCreated:
         """
         Da de alta taquillas de una talla con etiquetas consecutivas. Si el edificio no existe, 404.
-        En una transacción, con la fila del edificio bloqueada (I12): dos altas simultáneas en el mismo
+        En una transacción, con la fila del edificio bloqueada: dos altas simultáneas en el mismo
         edificio se ponen en fila, así que la segunda cuenta también las taquillas que acaba de crear la primera
         """
 
