@@ -64,5 +64,11 @@ services:
     ports:
       - "8002:8000"
 
+  # Worker del outbox: la misma imagen y las mismas variables que las APIs, solo cambia el comando.
+  # Sin puertos ni healthcheck: no atiende peticiones. `docker compose stop worker` le envía SIGTERM y termina limpio
+  worker:
+    <<: *app
+    command: ["python", "-m", "locker.outbox.worker"]
+
 volumes:
   pgdata:

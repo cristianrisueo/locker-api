@@ -4,7 +4,7 @@ API de taquillas para paquetería: un transportista reserva una taquilla de un e
 
 Qué hace el sistema y cómo se construye está en [`docs/especificaciones.md`](docs/especificaciones.md); el orden de construcción, por fases, en [`docs/plan_fases.md`](docs/plan_fases.md).
 
-> **Estado: F4.** Sobre la base de F0 (errores, logs, identificador de petición, `/health`, contenedores con dos réplicas, tests y CI) hay claves de API con roles, alta de edificios (con país), alta de taquillas con etiqueta generada, consulta de capacidad y **reserva de taquilla** segura bajo concurrencia, también entre réplicas, con **`Idempotency-Key` obligatoria**: repetir una reserva devuelve la misma respuesta. `country` se añadió a `buildings` con una **migración con datos**. El **ciclo de la entrega** está completo: el transportista deposita (y se apunta el evento del aviso en la misma transacción), consulta su entrega, y el residente recoge con un **código derivado** que no se guarda. Todavía no hay worker: los eventos se quedan en `outbox_events` y nadie envía el aviso.
+> **Estado: F5 (núcleo completo).** Sobre la base de F0 (errores, logs, identificador de petición, `/health`, contenedores con dos réplicas, tests y CI) hay claves de API con roles, alta de edificios (con país), alta de taquillas con etiqueta generada, consulta de capacidad y **reserva de taquilla** segura bajo concurrencia, también entre réplicas, con **`Idempotency-Key` obligatoria**: repetir una reserva devuelve la misma respuesta. `country` se añadió a `buildings` con una **migración con datos**. El **ciclo de la entrega** está completo: el transportista deposita (y se apunta el evento del aviso en la misma transacción), consulta su entrega, y el residente recoge con un **código derivado** que no se guarda. Un **worker** (proceso aparte con el mismo código) envía el aviso del depósito al residente desde el outbox, con reintentos y espera creciente; los avisos que agotan sus intentos quedan como eventos muertos y se reactivan con una sentencia SQL.
 
 ## Stack
 
@@ -29,6 +29,7 @@ uv sync                # instala Python 3.14.8 si hace falta y las dependencias 
 make up                # levanta PostgreSQL en Docker
 make migrate           # crea las tablas
 make run               # arranca la API en http://127.0.0.1:8000 (documentación en /docs)
+make worker            # en otra terminal: arranca el worker que envía los avisos (Ctrl-C para pararlo)
 ```
 
 Comprueba que responde:
@@ -48,8 +49,11 @@ Responde `200 {"status": "ok"}` con una cabecera `X-Request-ID`. Si paras la bas
 | `LOG_LEVEL`    | No          | `INFO`      | Nivel mínimo de los logs                                         |
 | `API_KEYS`     | Sí          | —           | Claves de API, en JSON de **una línea** (ver abajo)               |
 | `PICKUP_CODE_SECRET` | Sí    | —           | Secreto con el que se calcula el código de recogida (mínimo 32 caracteres) |
+| `OUTBOX_MAX_ATTEMPTS` | No   | `5`         | Intentos de envío de un aviso antes de dar el evento por muerto  |
+| `OUTBOX_BACKOFF_BASE_SECONDS` | No | `2`   | Base de la espera entre reintentos: 2, 4, 8 y 16 segundos (0 en los tests) |
+| `OUTBOX_POLL_INTERVAL_SECONDS` | No | `1`  | Pausa del worker cuando no hay eventos que enviar                |
 
-Se leen del entorno y, si no están, del `.env`. Si falta una obligatoria, la API no arranca. Alembic solo necesita `DATABASE_URL`: migrar no exige las claves ni el secreto. Si tu `.env` es anterior a F4, añádele `PICKUP_CODE_SECRET` (el valor de desarrollo está en `.env.example`): sin ella no arrancan ni `make run` ni las réplicas de `make e2e`.
+Se leen del entorno y, si no están, del `.env`. Si falta una obligatoria, ni la API ni el worker arrancan (los dos leen la misma configuración). Alembic solo necesita `DATABASE_URL`: migrar no exige las claves ni el secreto. Si tu `.env` es anterior a F4, añádele `PICKUP_CODE_SECRET` (el valor de desarrollo está en `.env.example`): sin ella no arrancan ni `make run` ni las réplicas de `make e2e`.
 
 ### Claves de API
 
@@ -111,8 +115,11 @@ curl -s -X POST localhost:8000/v1/deliveries/$ENTREGA/deposit -H "X-API-Key: dev
 # SEUR consulta su entrega (Correos Express recibiría 404: no es suya)
 curl -s localhost:8000/v1/deliveries/$ENTREGA -H "X-API-Key: dev-seur-key-0000000000000"
 
-# El código de recogida no se guarda ni sale en ninguna respuesta: se calcula con el secreto. Hasta que exista
-# el worker (que lo enviará en el aviso), se puede calcular en una consola
+# El código de recogida no se guarda ni sale en ninguna respuesta: se calcula con el secreto. Con `make worker` en
+# marcha, el aviso sale en el log del worker, en una línea JSON con su event_id:
+# {"ts":"...","level":"INFO","logger":"locker.notifier","message":"Tu paquete está en la taquilla M-01 del edificio
+#  Edificio Sol. Tu código de recogida es 483920.","request_id":null,"event_id":"...","delivery_id":"..."}
+# También se puede calcular en una consola
 CODIGO=$(uv run python -c "import uuid; from locker.core.config import get_settings; from locker.deliveries.pickup_code import derive; print(derive(get_settings().pickup_code_secret.get_secret_value(), uuid.UUID('$ENTREGA')))")
 
 # El residente recoge, sin clave de API: 200 con la entrega en PICKED_UP, y la taquilla vuelve a estar libre
@@ -140,19 +147,20 @@ Escribe `make` para ver la lista.
 | `make migrate` / `make rollback` | Aplica las migraciones pendientes o deshace la última                        |
 | `make migration m="mensaje"`     | Genera una migración a partir de los modelos                                 |
 | `make run`                       | Arranca la API con recarga automática en el puerto 8000                      |
+| `make worker`                    | Arranca el worker del outbox, que envía los avisos (Ctrl-C para pararlo)     |
 | `make check`                     | Formatea (`ruff format`), pasa el linter (`ruff check`) y los tipos (`mypy`) |
 | `make test`                      | Tests unitarios y de integración (necesita Docker)                           |
 | `make test-unit`                 | Solo los unitarios (sin Docker)                                              |
 | `make test-integration`          | Solo los de integración (PostgreSQL efímero)                                 |
 | `make coverage`                  | Tests con informe de cobertura (`htmlcov/index.html`)                        |
-| `make e2e`                       | Levanta el sistema en contenedores, migra y pasa E2E y smoke                 |
+| `make e2e`                       | Levanta el sistema en contenedores (dos réplicas y el worker), migra y pasa E2E y smoke |
 | `make smoke BASE_URLS=...`       | Smoke contra un sistema ya levantado (direcciones separadas por comas)       |
 
 ## Lo transversal (`src/locker/core/`)
 
 | Archivo                 | Responsabilidad                                                                                                       |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `config.py`             | `DatabaseSettings` (lo único que necesita Alembic) y `Settings` (la API), y `get_settings`                            |
+| `config.py`             | `DatabaseSettings` (lo único que necesita Alembic) y `Settings` (la API y el worker), y `get_settings`                |
 | `database.py`           | Engine, fábrica de sesiones, `Base` de las tablas con su convención de nombres, y `get_session` (una sesión por petición) |
 | `exceptions.py`         | `DomainError` y sus familias, con el `code` del catálogo de errores. No saben nada de HTTP                            |
 | `exception_handlers.py` | El único sitio que traduce un error a HTTP, siempre con la forma `{"code", "detail"}`                                 |
@@ -214,15 +222,34 @@ Taquilla:  FREE ──reservar──▶ BUSY ──recoger──▶ FREE
 
 **Código de recogida** (`deliveries/pickup_code.py`). No se guarda: se deriva del secreto y del id de la entrega. `derive` calcula el HMAC-SHA256 del id con `PICKUP_CODE_SECRET` como clave, toma sus cuatro primeros bytes como entero, lo reduce módulo 1.000.000 y lo escribe con ceros a la izquierda hasta seis cifras. `matches` compara en tiempo constante (`hmac.compare_digest`). El código no aparece en ninguna tabla, respuesta, evento ni log. Cambiar el secreto invalida los códigos pendientes, y no hay límite de intentos (limitación aceptada A1).
 
-**Outbox** (`outbox/`, por ahora parcial). `events.py` define el tipo `delivery.deposited` y su contenido, que es solo `{"delivery_id": "..."}`: ni el código ni los datos del residente. `repository.py` solo inserta. Cada evento se crea con `attempts = 0` y `next_attempt_at = now()`. El worker que los envía llega en la fase siguiente.
+**Outbox** (`outbox/`). El depósito apunta el evento en la misma transacción (outbox transaccional): `events.py` define el tipo `delivery.deposited` y su contenido, que es solo `{"delivery_id": "..."}`, ni el código ni los datos del residente. Cada evento se crea con `attempts = 0` y `next_attempt_at = now()`. No hay broker: la cola es la propia tabla.
 
-**Tablas.** `buildings` (`id`, `name`, `country`), `lockers` (`id`, `building_id`, `label`, `size`, `status`), `deliveries` (`id`, `locker_id`, `carrier`, `tracking_ref`, `recipient`, `status`, `deposited_at`, `picked_up_at`), `idempotency_keys` (`carrier`, `key`, `request_hash`, `response_body` en JSONB) y `outbox_events` (`id`, que es el `event_id`, `type`, `payload` en JSONB, `attempts` y `next_attempt_at`, donde `NULL` significa evento muerto; sin índices, porque los eventos enviados se borrarán). Llevan `CHECK` sobre las tallas, los estados y el formato del país, un índice **parcial** `ix_lockers_free_by_size` sobre `(building_id, size)` que solo contiene las taquillas libres, y dos índices **únicos parciales** sobre las entregas activas (`PENDING` o `DEPOSITED`): `uq_deliveries_active_locker` (una taquilla, una entrega activa) y `uq_deliveries_active_package` (un paquete, una entrega activa). Una entrega recogida no cuenta, así que la taquilla y la referencia se pueden volver a usar. Los identificadores son UUID v7 generados por la aplicación.
+**Worker** (`outbox/worker.py`). Un proceso aparte con el mismo código y la misma imagen: `make worker` en local (`python -m locker.outbox.worker`) o el servicio `worker` de Compose. Lee la misma configuración que la API, configura los logs en JSON y crea su propio pool de conexiones. En bucle llama a `process_next()`: si ha procesado un evento, va a por el siguiente sin esperar; si no había ninguno, hace una pausa de `OUTBOX_POLL_INTERVAL_SECONDS`. Un error inesperado (la base de datos no responde, el esquema aún no está migrado) se registra en el log y se reintenta tras la pausa: el worker no muere. Se para con Ctrl-C (`SIGINT`) o `SIGTERM` (`docker compose stop worker`): termina el evento en curso y sale con código 0 en el momento, aunque esté en mitad de la pausa, porque la pausa espera al evento de parada con un plazo en vez de dormir. Se pueden lanzar varios workers a la vez.
+
+**`process_next`** (`outbox/service.py`). Todo en una transacción, por evento:
+
+1. Toma el evento vencido más antiguo con `SELECT ... WHERE next_attempt_at <= now() ORDER BY next_attempt_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`. El bloqueo impide que dos workers envíen el mismo evento; `SKIP LOCKED` hace que un worker salte el evento que otro tiene bloqueado en vez de esperarlo. Un `next_attempt_at` futuro (esperando a reintentarse) o nulo (muerto) no se toma. Si no hay ninguno, devuelve `False`.
+2. Construye el aviso: lee el destinatario, la taquilla y el edificio de la entrega, y calcula el código con `pickup_code.derive`.
+3. Lo envía con el notificador y, si sale bien, **borra** el evento.
+4. Si algo falla al construir o enviar el aviso (por ejemplo, la entrega no existe o el notificador lanza un error), lo registra en el log con el id del evento y el error (nunca el aviso) y apunta el fallo **sin relanzar el error**, para que la transacción confirme: `attempts + 1` y `next_attempt_at = now() + espera`, con una espera de `OUTBOX_BACKOFF_BASE_SECONDS × 2^(attempts − 1)` (2, 4, 8 y 16 s: el evento aguanta una caída de unos 30 s, limitación aceptada A11). Al llegar a `OUTBOX_MAX_ATTEMPTS`, `next_attempt_at` queda nulo: el evento muere. Si se relanzara el error, la transacción se desharía y el fallo no quedaría apuntado: se reintentaría sin fin y sin espera.
+
+La transacción sigue abierta mientras se envía el aviso (limitación aceptada A3). La entrega es **al menos una vez**: si el aviso sale y algo falla antes de borrar el evento, se reenvía con el mismo `event_id`, para que el receptor reconozca el repetido.
+
+**Notificador** (`outbox/notifier.py`). `Notification` lleva `event_id`, `delivery_id`, `recipient`, `building_name`, `locker_label`, `pickup_code` y `message`; el código y el texto (que lo contiene) no salen en su `repr`. `Notifier` es un `Protocol` con `send`. La única implementación es `LogNotifier`, que escribe el aviso en el logger `locker.notifier`, con `event_id` y `delivery_id` como campos. Es la única línea de log del sistema que lleva el código de recogida (limitación aceptada A5: solo vale para una demostración).
+
+**Eventos muertos.** Un evento que agota sus intentos de envío (`OUTBOX_MAX_ATTEMPTS`) se queda en `outbox_events` con `next_attempt_at` nulo: no avisa a nadie y no se vuelve a tomar (limitación aceptada A4). Cuando se haya arreglado la causa, se reactivan todos con este `UPDATE` (por ejemplo, desde `make psql`), que les devuelve los intentos y los deja vencidos para la siguiente pasada:
+
+```sql
+UPDATE outbox_events SET attempts = 0, next_attempt_at = now() WHERE next_attempt_at IS NULL;
+```
+
+**Tablas.** `buildings` (`id`, `name`, `country`), `lockers` (`id`, `building_id`, `label`, `size`, `status`), `deliveries` (`id`, `locker_id`, `carrier`, `tracking_ref`, `recipient`, `status`, `deposited_at`, `picked_up_at`), `idempotency_keys` (`carrier`, `key`, `request_hash`, `response_body` en JSONB) y `outbox_events` (`id`, que es el `event_id`, `type`, `payload` en JSONB, `attempts` y `next_attempt_at`, donde `NULL` significa evento muerto; sin índices, porque los eventos enviados se borran). Llevan `CHECK` sobre las tallas, los estados y el formato del país, un índice **parcial** `ix_lockers_free_by_size` sobre `(building_id, size)` que solo contiene las taquillas libres, y dos índices **únicos parciales** sobre las entregas activas (`PENDING` o `DEPOSITED`): `uq_deliveries_active_locker` (una taquilla, una entrega activa) y `uq_deliveries_active_package` (un paquete, una entrega activa). Una entrega recogida no cuenta, así que la taquilla y la referencia se pueden volver a usar. Los identificadores son UUID v7 generados por la aplicación.
 
 **Migración con datos.** `country` se añadió a `buildings` cuando ya había edificios, con el patrón expand → backfill → contract en una sola migración: se añade la columna admitiendo `NULL` (expand), se rellena con `UPDATE buildings SET country = 'ES'` (backfill) y después se exige con `NOT NULL` y `ck_buildings_country_format` (contract). Añadirla directamente como `NOT NULL` fallaría con los edificios existentes. El `downgrade` quita el `CHECK` y la columna, y conserva los edificios.
 
 ## Docker
 
-La misma imagen (`Dockerfile`) arranca la API y aplica las migraciones; solo cambia el comando. En `compose.yml`:
+La misma imagen (`Dockerfile`) arranca la API, el worker y aplica las migraciones; solo cambia el comando. En `compose.yml`:
 
 | Servicio  | Qué es                                                                                    |
 | --------- | ----------------------------------------------------------------------------------------- |
@@ -230,6 +257,7 @@ La misma imagen (`Dockerfile`) arranca la API y aplica las migraciones; solo cam
 | `migrate` | Perfil `app`. Ejecuta `alembic upgrade head` y termina                                    |
 | `api-1`   | Perfil `app`. La API en el puerto 8001, con healthcheck contra `/health`                  |
 | `api-2`   | Perfil `app`. La misma API en el puerto 8002                                              |
+| `worker`  | Perfil `app`. El worker del outbox (`python -m locker.outbox.worker`), con las mismas variables que las APIs |
 
 El perfil `app` hace que `make up` levante solo PostgreSQL para el día a día. Las migraciones nunca se aplican al arrancar la API: son un paso explícito, como en un pipeline de despliegue.
 
@@ -239,9 +267,9 @@ Tres niveles; cada comportamiento se prueba en el más bajo que caza su bug:
 
 | Nivel       | Carpeta             | Qué prueba                                                                                          |
 | ----------- | ------------------- | --------------------------------------------------------------------------------------------------- |
-| Unitario    | `tests/unit`        | Lógica pura en memoria: traducción de errores, formateador de logs, validación de `API_KEYS`, etiquetas, huella, código de recogida |
-| Integración | `tests/integration` | La API en el mismo proceso (httpx + `ASGITransport`) contra PostgreSQL real                         |
-| E2E y smoke | `tests/e2e`         | Peticiones reales contra el sistema en contenedores, en cada réplica                                |
+| Unitario    | `tests/unit`        | Lógica pura en memoria: traducción de errores, formateador de logs, validación de `API_KEYS`, etiquetas, huella, código de recogida, espera y agotamiento de los reintentos |
+| Integración | `tests/integration` | La API en el mismo proceso (httpx + `ASGITransport`), el servicio del outbox y el bucle del worker, contra PostgreSQL real |
+| E2E y smoke | `tests/e2e`         | Peticiones reales contra el sistema en contenedores, en cada réplica, y el worker desplegado        |
 
 - **PostgreSQL real y efímero** ([testcontainers](https://testcontainers-python.readthedocs.io/), imagen `postgres:18`, la misma que `compose.yml`). Nunca se toca la base de datos de desarrollo.
 - **Esquema con Alembic**: `alembic upgrade head` en un subproceso, como `make migrate`, desde un directorio vacío para que no lea ningún `.env`.
@@ -250,10 +278,11 @@ Tres niveles; cada comportamiento se prueba en el más bajo que caza su bug:
 - **Configuración propia**: los tests sustituyen `get_settings` con claves de prueba, así que no dependen del `.env` ni de `API_KEYS` del entorno.
 - **Concurrencia** con varias sesiones y `asyncio.gather` (dos altas de taquillas a la vez, 10 reservas para 5 taquillas, dos reservas idénticas con la misma clave, dos recogidas de la misma entrega), sin `sleep`. Los casos deterministas dejan una transacción abierta (con el edificio bloqueado, una taquilla ocupada, una clave registrada, una entrega depositada o recogida) y esperan a ver la petición parada en un bloqueo en `pg_stat_activity`. Antes de lanzarlas se abren las conexiones del pool: si no, las peticiones no llegan a solaparse y el test pasaría aunque faltase la protección. Entre procesos reales, un E2E reparte 10 reservas entre `api-1` y `api-2` con hilos.
 - **Migraciones**: un test comprueba que `alembic check` no ve diferencias y que todas las migraciones bajan y suben en una base de datos vacía. Otro migra hasta la revisión anterior a `country`, inserta edificios, aplica la de `country` y comprueba que se conservan con `ES`, también tras bajar y volver a subir.
-- **Sin dobles**: la base de datos caída se prueba con una URL inalcanzable, y la atomicidad del depósito con un trigger que hace fallar de verdad el `INSERT` del evento (la entrega sigue `PENDING`).
-- **El código de recogida**: los tests lo calculan con `pickup_code.derive` y el secreto de su configuración, y comprueban que no aparece en ninguna respuesta del ciclo ni en los logs. El E2E recorre reservar, depositar y recoger alternando `api-1` y `api-2`, con el secreto del `.env`.
+- **Sin dobles**, salvo uno: la base de datos caída se prueba con una URL inalcanzable, y la atomicidad del depósito con un trigger que hace fallar de verdad el `INSERT` del evento (la entrega sigue `PENDING`). La única excepción es `NotificadorFalso` (`tests/integration/notificador_falso.py`), porque un fallo del sistema que envía el aviso no se puede provocar de verdad: graba cada aviso y falla cuando se le pide, antes o después de grabarlo.
+- **El worker**: los tests de `process_next` cubren el envío (con el código calculado por el test), la cola vacía, el evento no vencido, el fallo (que confirma y programa el reintento), cinco fallos hasta el evento muerto, su reactivación con el `UPDATE` del README, el reenvío con el mismo `event_id` y el evento sin entrega. Los reintentos no esperan: la base de la espera es 0 en los tests. Dos workers a la vez envían cada evento una sola vez, y un caso determinista deja un evento bloqueado por otra transacción y comprueba que se salta sin esperar. El bucle se prueba sin señales ni procesos: se para al instante aunque la pausa sea de 60 s, y sobrevive a una base de datos sin migrar hasta que se migra.
+- **El código de recogida**: los tests lo calculan con `pickup_code.derive` y el secreto de su configuración, y comprueban que no aparece en ninguna respuesta del ciclo ni en los logs. El E2E recorre reservar, depositar y recoger alternando `api-1` y `api-2`, con el secreto del `.env`. Otro E2E deposita y espera, como mucho 10 s, a que el worker desplegado envíe el aviso y borre el evento de esa entrega.
 
-`make test` no ejecuta los E2E. `make e2e` levanta `db`, aplica las migraciones con `migrate`, arranca `api-1` y `api-2` y pasa `tests/e2e` contra `http://127.0.0.1:8001` y `http://127.0.0.1:8002`; al terminar para las réplicas. Usa la base de datos de desarrollo.
+`make test` no ejecuta los E2E. `make e2e` levanta `db`, aplica las migraciones con `migrate`, arranca `api-1`, `api-2` y `worker` y pasa `tests/e2e` contra `http://127.0.0.1:8001` y `http://127.0.0.1:8002`; al terminar los para. Usa la base de datos de desarrollo.
 
 Se sigue TDD: el test en rojo se sube marcado con `@pytest.mark.xfail(strict=True)` y el commit que lo arregla quita el marcador.
 

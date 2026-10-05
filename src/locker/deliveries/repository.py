@@ -6,6 +6,7 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from locker.buildings.models import BuildingModel
 from locker.deliveries.exceptions import DuplicatePackageError
 from locker.deliveries.models import DeliveryModel
 from locker.deliveries.schemas import Delivery, ReservationIn
@@ -38,6 +39,14 @@ class PickedUpDelivery(NamedTuple):
     locker_id: uuid.UUID
 
 
+class DeliveryNotice(NamedTuple):
+    """Lo mínimo para avisar al residente de una entrega: a quién, en qué taquilla y en qué edificio."""
+
+    recipient: str
+    locker_label: str
+    building_name: str
+
+
 class DeliveryRepository(Protocol):
     """Interfaz de acceso a datos. Cualquier clase con estos métodos la cumple."""
 
@@ -53,6 +62,9 @@ class DeliveryRepository(Protocol):
 
     # Pasa la entrega de DEPOSITED a PICKED_UP y la devuelve con su taquilla. None si no ha cambiado ninguna fila
     async def pick_up(self, delivery_id: uuid.UUID) -> PickedUpDelivery | None: ...
+
+    # Lee el destinatario, la etiqueta de la taquilla y el nombre del edificio de la entrega. None si no existe
+    async def get_notice(self, delivery_id: uuid.UUID) -> DeliveryNotice | None: ...
 
 
 class SqlDeliveryRepository:
@@ -194,3 +206,21 @@ class SqlDeliveryRepository:
         if row is None:
             return None
         return PickedUpDelivery(Delivery.model_validate(row, from_attributes=True), row.locker_id)
+
+    async def get_notice(self, delivery_id: uuid.UUID) -> DeliveryNotice | None:
+        """
+        Lee lo que necesita el aviso al residente, uniendo la entrega con su taquilla y su edificio: el destinatario,
+        la etiqueta de la taquilla y el nombre del edificio. Nada más: el aviso no necesita el resto de la entrega
+        """
+        stmt = (
+            select(DeliveryModel.recipient, LockerModel.label, BuildingModel.name)
+            .join(LockerModel, LockerModel.id == DeliveryModel.locker_id)
+            .join(BuildingModel, BuildingModel.id == LockerModel.building_id)
+            .where(DeliveryModel.id == delivery_id)
+        )
+
+        # Convierte la fila al resultado, o None si la entrega no existe
+        row = (await self._session.execute(stmt)).one_or_none()
+        return (
+            None if row is None else DeliveryNotice(recipient=row.recipient, locker_label=row.label, building_name=row.name)
+        )
