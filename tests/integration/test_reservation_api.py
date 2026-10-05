@@ -57,7 +57,6 @@ async def test_reservar_asigna_una_taquilla_libre_de_la_talla_pedida(
     assert await entregas(session) == [(entrega["id"], "SEUR", "ES123", "PENDING")]
 
 
-@pytest.mark.xfail(strict=True, reason="F2: falta NoLockerAvailableError")
 async def test_sin_taquilla_libre_de_la_talla_devuelve_409_y_no_asigna_una_mayor(
     session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -77,7 +76,6 @@ async def test_sin_taquilla_libre_de_la_talla_devuelve_409_y_no_asigna_una_mayor
     assert await entregas(session) == [(primera.json()["id"], "SEUR", "ES123", "PENDING")]
 
 
-@pytest.mark.xfail(strict=True, reason="F2: falta comprobar que el edificio existe")
 async def test_reservar_en_un_edificio_inexistente_devuelve_404(
     session: AsyncSession, reservar: Reservar, cabeceras_transportista: dict[str, str]
 ) -> None:

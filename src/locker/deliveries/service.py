@@ -1,9 +1,11 @@
 # Capa de servicio de entregas: reservar una taquilla para un paquete.
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from locker.buildings.exceptions import BuildingNotFoundError
 from locker.buildings.repository import BuildingRepository
 from locker.deliveries.repository import DeliveryRepository
 from locker.deliveries.schemas import Delivery, ReservationIn
+from locker.lockers.exceptions import NoLockerAvailableError
 from locker.lockers.repository import LockerRepository
 
 
@@ -32,10 +34,15 @@ class DeliveryService:
 
         # La transacción es lo primero del caso de uso (I5): al salir del bloque se confirma, y si hay un error se deshace
         async with self._session.begin():
-            # 1. Ocupa una taquilla libre de esa talla, en una sola sentencia
+            # 1. Comprueba que el edificio existe. Sin esto, un edificio inexistente parecería uno sin taquillas (409)
+            if not await self._buildings.exists(data.building_id):
+                raise BuildingNotFoundError(data.building_id)
+
+            # 2. Ocupa una taquilla libre de esa talla, en una sola sentencia. Si no queda ninguna, 409.
+            # Va antes que crear la entrega: un paquete duplicado sin taquillas libres recibe este error (A10)
             locker = await self._lockers.allocate(data.building_id, data.size)
             if locker is None:
-                raise NotImplementedError
+                raise NoLockerAvailableError
 
-            # 2. Crea la entrega en la taquilla asignada
+            # 3. Crea la entrega en la taquilla asignada
             return await self._deliveries.add(locker, carrier, data)
