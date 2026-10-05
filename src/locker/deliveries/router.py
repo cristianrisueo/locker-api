@@ -1,4 +1,4 @@
-# Rutas de la API de entregas: reservar, depositar y consultar.
+# Rutas de la API de entregas: reservar, depositar, consultar y recoger.
 import uuid
 from typing import Annotated
 
@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, status
 
 from locker.core.security import Principal, require_role
 from locker.deliveries.dependencies import DeliveryServiceDep
-from locker.deliveries.schemas import Delivery, ReservationIn
+from locker.deliveries.schemas import Delivery, PickupIn, ReservationIn
 
 # Prefijo de la ruta y etiqueta para la documentación de Swagger. main.py añade delante /v1
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
@@ -85,3 +85,21 @@ async def get_delivery(
     # Una clave carrier siempre lleva name: lo exige la validación de la configuración al arrancar
     assert principal.name is not None
     return await service.get(principal.name, delivery_id)
+
+
+@router.post(
+    "/{delivery_id}/pickup",
+    summary="Recoger el paquete con su código",
+    responses={
+        403: {"description": "El código de recogida no es el de la entrega"},
+        404: {"description": "La entrega no existe"},
+        409: {"description": "La entrega no está depositada (aún no, o ya se recogió)"},
+        422: {"description": "El código no son seis cifras"},
+    },
+)
+async def pick_up(delivery_id: uuid.UUID, body: PickupIn, service: DeliveryServiceDep) -> Delivery:
+    """
+    El residente recoge su paquete con el código que recibió en el aviso. Sin clave de API: quien conoce el id de
+    la entrega y su código puede recogerla. La taquilla vuelve a quedar libre
+    """
+    return await service.pick_up(delivery_id, body.code)

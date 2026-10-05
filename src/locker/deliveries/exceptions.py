@@ -1,7 +1,7 @@
 # Errores de dominio de entregas. Solo heredan de la familia que les corresponde.
 import uuid
 
-from locker.core.exceptions import ConflictError, NotFoundError
+from locker.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 
 
 class DuplicatePackageError(ConflictError):
@@ -30,3 +30,15 @@ class InvalidStateError(ConflictError):
 
     def __init__(self) -> None:
         super().__init__("La entrega no está en un estado que permita esta operación")
+
+
+class InvalidPickupCodeError(ForbiddenError):
+    """
+    El código de recogida no es el de la entrega. Lleva su propio code, no el FORBIDDEN de la familia.
+    El detail es fijo: nunca repite el código recibido ni, por supuesto, el correcto (I7)
+    """
+
+    code = "INVALID_PICKUP_CODE"
+
+    def __init__(self) -> None:
+        super().__init__("Código de recogida incorrecto")

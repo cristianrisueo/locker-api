@@ -1,12 +1,14 @@
-# Capa de servicio de entregas: reservar una taquilla para un paquete (con su clave de idempotencia), depositarlo
-# y consultarlo.
+# Capa de servicio de entregas: reservar una taquilla para un paquete (con su clave de idempotencia), depositarlo,
+# consultarlo y recogerlo.
 import uuid
 
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.buildings.exceptions import BuildingNotFoundError
 from locker.buildings.repository import BuildingRepository
-from locker.deliveries.exceptions import DeliveryNotFoundError, InvalidStateError
+from locker.deliveries import pickup_code
+from locker.deliveries.exceptions import DeliveryNotFoundError, InvalidPickupCodeError, InvalidStateError
 from locker.deliveries.repository import DeliveryRepository
 from locker.deliveries.schemas import Delivery, ReservationIn
 from locker.idempotency.exceptions import IdempotencyKeyReusedError
@@ -27,10 +29,12 @@ class DeliveryService:
         buildings: BuildingRepository,
         idempotency: IdempotencyRepository,
         outbox: OutboxRepository,
+        pickup_code_secret: SecretStr,
     ) -> None:
         """
         Recibe la sesión de la petición (para abrir la transacción) y los repositorios que la usan: el de entregas,
-        el de taquillas, el de edificios, el de claves de idempotencia y el del outbox, que comparten esa misma sesión
+        el de taquillas, el de edificios, el de claves de idempotencia y el del outbox, que comparten esa misma sesión.
+        Y el secreto con el que se comprueba el código de recogida, que sigue siendo un SecretStr hasta que se usa
         """
         self._session = session
         self._deliveries = deliveries
@@ -38,6 +42,7 @@ class DeliveryService:
         self._buildings = buildings
         self._idempotency = idempotency
         self._outbox = outbox
+        self._pickup_code_secret = pickup_code_secret
 
     async def reserve(self, carrier: str, idempotency_key: str, data: ReservationIn) -> Delivery:
         """
@@ -115,3 +120,38 @@ class DeliveryService:
         if delivery is None:
             raise DeliveryNotFoundError(delivery_id)
         return delivery
+
+    async def pick_up(self, delivery_id: uuid.UUID, code: str) -> Delivery:
+        """
+        El residente recoge su paquete con el código: la entrega pasa de DEPOSITED a PICKED_UP y la taquilla vuelve
+        a quedar libre, las dos en una transacción. Las comprobaciones van en este orden (§7.7): existe, estado, código
+        """
+
+        # Crea la transacción: al salir del bloque se confirma, y si hay un error se deshace
+        async with self._session.begin():
+            # 1. La entrega no existe -> 404. Sin filtro de transportista: quien recoge es el residente
+            delivery = await self._deliveries.get(delivery_id)
+            if delivery is None:
+                raise DeliveryNotFoundError(delivery_id)
+
+            # 2. No está depositada (sin depositar, o ya recogida) -> 409. Va antes que el código: a quien no
+            # conoce el código no le dice nada nuevo, y a quien lo conoce le explica por qué no puede recoger
+            if delivery.status != "DEPOSITED":
+                raise InvalidStateError
+
+            # 3. El código no es el derivado de la entrega -> 403, y nada cambia. Se compara en tiempo constante
+            if not pickup_code.matches(self._pickup_code_secret.get_secret_value(), delivery_id, code):
+                raise InvalidPickupCodeError
+
+            # 4. Pasa la entrega a PICKED_UP solo si sigue DEPOSITED. La lectura del paso 2 no protege de nada:
+            # si otra recogida simultánea ganó, este UPDATE no cambia ninguna fila -> 409
+            picked_up = await self._deliveries.pick_up(delivery_id)
+            if picked_up is None:
+                raise InvalidStateError
+
+            # 5. Libera la taquilla, también condicional (BUSY -> FREE). Una entrega DEPOSITED siempre ocupa su
+            # taquilla: si no estaba ocupada, algo va muy mal, y el error deshace la transacción entera
+            if not await self._lockers.release(picked_up.locker_id):
+                raise RuntimeError(f"La taquilla {picked_up.locker_id} de una entrega depositada no estaba ocupada")
+
+            return picked_up.delivery

@@ -24,6 +24,9 @@ class LockerRepository(Protocol):
     # Ocupa una taquilla libre de esa talla y la devuelve ya BUSY. None si no queda ninguna libre
     async def allocate(self, building_id: uuid.UUID, size: Size) -> Locker | None: ...
 
+    # Libera una taquilla ocupada (BUSY -> FREE). False si no estaba ocupada
+    async def release(self, locker_id: uuid.UUID) -> bool: ...
+
 
 class SqlLockerRepository:
     """Implementación sobre PostgreSQL con SQLAlchemy. Nunca hace commit ni rollback: eso es cosa del servicio."""
@@ -116,3 +119,18 @@ class SqlLockerRepository:
 
         # Convierte el modelo de SQLAlchemy a un schema de Pydantic, o None si no quedaba ninguna libre
         return None if model is None else Locker.model_validate(model, from_attributes=True)
+
+    async def release(self, locker_id: uuid.UUID) -> bool:
+        """
+        Libera la taquilla con un UPDATE condicional por su estado de origen (I4):
+        UPDATE lockers SET status = 'FREE' WHERE id = :locker_id AND status = 'BUSY' RETURNING id.
+        Devuelve si ha cambiado la fila: una taquilla que ya estaba libre no se «libera» dos veces
+        """
+        stmt = (
+            update(LockerModel)
+            .where(LockerModel.id == locker_id, LockerModel.status == "BUSY")
+            .values(status="FREE")
+            .returning(LockerModel.id)
+            .execution_options(synchronize_session=False)
+        )
+        return (await self._session.execute(stmt)).first() is not None

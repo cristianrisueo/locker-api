@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.buildings.dependencies import get_repository as get_building_repository
 from locker.buildings.repository import BuildingRepository
+from locker.core.config import Settings, get_settings
 from locker.core.database import get_session
 from locker.deliveries.repository import DeliveryRepository, SqlDeliveryRepository
 from locker.deliveries.service import DeliveryService
@@ -36,9 +37,13 @@ def get_service(
     buildings: Annotated[BuildingRepository, Depends(get_building_repository)],
     idempotency: Annotated[IdempotencyRepository, Depends(get_idempotency_repository)],
     outbox: Annotated[OutboxRepository, Depends(get_outbox_repository)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> DeliveryService:
-    """Construye el servicio con sus cinco repositorios. Todos comparten la sesión de la petición."""
-    return DeliveryService(session, deliveries, lockers, buildings, idempotency, outbox)
+    """
+    Construye el servicio con sus cinco repositorios, que comparten la sesión de la petición, y el secreto del
+    código de recogida, que llega de la configuración (los tests la sustituyen con dependency_overrides)
+    """
+    return DeliveryService(session, deliveries, lockers, buildings, idempotency, outbox, settings.pickup_code_secret)
 
 
 # Atajo para reutilizar en las rutas: inyecta el servicio de entregas ya construido

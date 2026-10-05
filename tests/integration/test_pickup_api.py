@@ -61,7 +61,6 @@ async def depositar_una(
     return depositada
 
 
-@pytest.mark.xfail(strict=True, reason="recoger todavía no existe")
 async def test_recoger_con_el_codigo_correcto_libera_la_taquilla(
     session: AsyncSession,
     client: AsyncClient,
@@ -86,7 +85,6 @@ async def test_recoger_con_el_codigo_correcto_libera_la_taquilla(
     assert datetime.fromisoformat(entrega["picked_up_at"]) == recogida
 
 
-@pytest.mark.xfail(strict=True, reason="recoger todavía no existe")
 async def test_recoger_con_un_codigo_incorrecto_devuelve_403_y_no_cambia_nada(
     session: AsyncSession,
     client: AsyncClient,
@@ -107,7 +105,6 @@ async def test_recoger_con_un_codigo_incorrecto_devuelve_403_y_no_cambia_nada(
     assert await estado_en_bd(session, depositada["id"]) == ("DEPOSITED", None, "BUSY")
 
 
-@pytest.mark.xfail(strict=True, reason="recoger todavía no existe")
 @pytest.mark.parametrize(
     "codigo",
     ["12345", "1234567", "12a456", " 123456", "", 123456, None, "١٢٣٤٥٦"],
@@ -136,7 +133,6 @@ async def test_recoger_con_un_codigo_mal_formado_devuelve_422(
     assert await estado_en_bd(session, depositada["id"]) == ("DEPOSITED", None, "BUSY")
 
 
-@pytest.mark.xfail(strict=True, reason="recoger todavía no existe")
 async def test_recoger_sin_codigo_devuelve_422(client: AsyncClient) -> None:
     """«[F4-09]» Un cuerpo sin el campo code es un 422 VALIDATION_ERROR."""
     respuesta = await client.post(f"/v1/deliveries/{uuid.uuid7()}/pickup", json={})
@@ -145,7 +141,6 @@ async def test_recoger_sin_codigo_devuelve_422(client: AsyncClient) -> None:
     assert respuesta.json() == {"code": "VALIDATION_ERROR", "detail": "code: Field required"}
 
 
-@pytest.mark.xfail(strict=True, reason="recoger todavía no existe")
 async def test_recoger_una_entrega_inexistente_devuelve_404(client: AsyncClient) -> None:
     """«[F4-09]» Una entrega que no existe es un 404 con su id en el detail, se envíe el código que se envíe."""
     entrega = uuid.uuid7()
@@ -156,7 +151,6 @@ async def test_recoger_una_entrega_inexistente_devuelve_404(client: AsyncClient)
     assert respuesta.json() == {"code": "NOT_FOUND", "detail": f"Entrega {entrega} no encontrada"}
 
 
-@pytest.mark.xfail(strict=True, reason="recoger todavía no existe")
 async def test_recoger_una_entrega_sin_depositar_devuelve_409(
     session: AsyncSession,
     client: AsyncClient,
@@ -180,7 +174,6 @@ async def test_recoger_una_entrega_sin_depositar_devuelve_409(
     assert await estado_en_bd(session, reserva["id"]) == ("PENDING", None, "BUSY")
 
 
-@pytest.mark.xfail(strict=True, reason="recoger todavía no existe")
 async def test_recoger_sin_depositar_con_un_codigo_incorrecto_devuelve_409(
     session: AsyncSession,
     client: AsyncClient,
@@ -204,7 +197,6 @@ async def test_recoger_sin_depositar_con_un_codigo_incorrecto_devuelve_409(
     assert await estado_en_bd(session, reserva["id"]) == ("PENDING", None, "BUSY")
 
 
-@pytest.mark.xfail(strict=True, reason="recoger todavía no existe")
 async def test_recoger_dos_veces_devuelve_409(
     session: AsyncSession,
     client: AsyncClient,

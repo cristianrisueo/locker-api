@@ -1,6 +1,6 @@
 # Repositorio de entregas: define la interfaz y su implementación sobre PostgreSQL.
 import uuid
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +31,13 @@ DELIVERY_COLUMNS = (
 )
 
 
+class PickedUpDelivery(NamedTuple):
+    """Una entrega recién recogida y la taquilla que ocupaba, que el servicio libera a continuación."""
+
+    delivery: Delivery
+    locker_id: uuid.UUID
+
+
 class DeliveryRepository(Protocol):
     """Interfaz de acceso a datos. Cualquier clase con estos métodos la cumple."""
 
@@ -43,6 +50,9 @@ class DeliveryRepository(Protocol):
 
     # Pasa la entrega del transportista de PENDING a DEPOSITED y la devuelve. None si no ha cambiado ninguna fila
     async def deposit(self, delivery_id: uuid.UUID, carrier: str) -> Delivery | None: ...
+
+    # Pasa la entrega de DEPOSITED a PICKED_UP y la devuelve con su taquilla. None si no ha cambiado ninguna fila
+    async def pick_up(self, delivery_id: uuid.UUID) -> PickedUpDelivery | None: ...
 
 
 class SqlDeliveryRepository:
@@ -150,3 +160,37 @@ class SqlDeliveryRepository:
         # Una fila si ha cambiado la entrega; ninguna si no existe, es de otro o no estaba PENDING
         row = (await self._session.execute(stmt)).one_or_none()
         return None if row is None else Delivery.model_validate(row, from_attributes=True)
+
+    async def pick_up(self, delivery_id: uuid.UUID) -> PickedUpDelivery | None:
+        """
+        Cambia el estado con un UPDATE condicional, sin leerlo antes en Python (I4):
+
+        UPDATE deliveries SET status = 'PICKED_UP', picked_up_at = now()
+        FROM lockers
+        WHERE deliveries.id = :id AND deliveries.status = 'DEPOSITED' AND lockers.id = deliveries.locker_id
+        RETURNING ..., deliveries.locker_id
+
+        Si otra recogida de la misma entrega está en curso, el UPDATE espera a que termine y vuelve a comprobar la
+        condición con la fila ya confirmada: de dos recogidas a la vez, solo una cambia la fila
+        """
+
+        # Solo si está DEPOSITED. Sin transportista: recoge el residente, que se identifica con el código.
+        # Como en deposit, la condición sobre lockers solo une las tablas para el RETURNING.
+        # Además de la entrega, devuelve su taquilla: es la que hay que liberar
+        stmt = (
+            update(DeliveryModel)
+            .where(
+                DeliveryModel.id == delivery_id,
+                DeliveryModel.status == "DEPOSITED",
+                LockerModel.id == DeliveryModel.locker_id,
+            )
+            .values(status="PICKED_UP", picked_up_at=func.now())
+            .returning(*DELIVERY_COLUMNS, DeliveryModel.locker_id)
+            .execution_options(synchronize_session=False)
+        )
+
+        # Una fila si ha cambiado la entrega; ninguna si ya no estaba DEPOSITED (otra recogida ganó)
+        row = (await self._session.execute(stmt)).one_or_none()
+        if row is None:
+            return None
+        return PickedUpDelivery(Delivery.model_validate(row, from_attributes=True), row.locker_id)
