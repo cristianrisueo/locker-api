@@ -89,6 +89,51 @@ async def test_reservar_en_un_edificio_inexistente_devuelve_404(
     assert await entregas(session) == []
 
 
+@pytest.mark.xfail(strict=True, reason="F2: falta traducir el IntegrityError a DuplicatePackageError")
+async def test_reservar_un_paquete_con_reserva_activa_devuelve_409(
+    session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
+) -> None:
+    """
+    «[F2-04]» El mismo paquete (mismo transportista y referencia) con una entrega activa es un 409 DUPLICATE_PACKAGE.
+    La segunda reserva llegó a ocupar M-02 antes de chocar con el índice: el rollback la deja libre otra vez.
+    """
+    edificio = await crear_edificio({"M": 2})
+    primera = await reservar(cabeceras_transportista, edificio, tracking_ref="ES123")
+    assert primera.status_code == 201
+
+    respuesta = await reservar(cabeceras_transportista, edificio, tracking_ref="ES123")
+
+    assert respuesta.status_code == 409
+    assert respuesta.json() == {"code": "DUPLICATE_PACKAGE", "detail": "Este paquete ya tiene una reserva activa"}
+    assert await taquillas(session, edificio) == [("M-01", "BUSY"), ("M-02", "FREE")]
+    assert await entregas(session) == [(primera.json()["id"], "SEUR", "ES123", "PENDING")]
+
+
+async def test_la_misma_referencia_de_otro_transportista_es_otra_reserva(
+    session: AsyncSession,
+    crear_edificio: CrearEdificio,
+    reservar: Reservar,
+    cabeceras_transportista: dict[str, str],
+    cabeceras_correos: dict[str, str],
+) -> None:
+    """
+    «[F2-05]» Un paquete es transportista + referencia: ES123 de SEUR y ES123 de Correos Express son paquetes
+    distintos, y cada uno se queda con su taquilla.
+    """
+    edificio = await crear_edificio({"M": 2})
+    seur = await reservar(cabeceras_transportista, edificio, tracking_ref="ES123")
+
+    correos = await reservar(cabeceras_correos, edificio, tracking_ref="ES123")
+
+    assert (seur.status_code, correos.status_code) == (201, 201)
+    assert (seur.json()["locker_label"], correos.json()["locker_label"]) == ("M-01", "M-02")
+    assert correos.json()["carrier"] == "Correos Express"
+    assert await entregas(session) == [
+        (seur.json()["id"], "SEUR", "ES123", "PENDING"),
+        (correos.json()["id"], "Correos Express", "ES123", "PENDING"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("cabeceras", "esperado"),
     [
