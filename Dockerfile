@@ -1,5 +1,5 @@
-# Imagen de la aplicación. La misma imagen arranca la API y aplica las migraciones (servicio migrate de
-# compose.yml, como paso explícito, nunca al arrancar): solo cambia el comando.
+# Imagen de la aplicación. La misma imagen arranca la API, el worker del outbox y aplica las migraciones (servicio
+# migrate de compose.yml, como paso explícito, nunca al arrancar): solo cambia el comando.
 FROM python:3.14.8-slim
 
 # uv, en la misma versión que en local

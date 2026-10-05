@@ -61,7 +61,7 @@ coverage:  ## Unitarios + integración con informe de cobertura (terminal y html
 # --- Sistema desplegado ---
 
 # Servicios de la aplicación que levanta y para `make e2e` (la base de datos se queda en marcha)
-APP_SERVICES = api-1 api-2
+APP_SERVICES = api-1 api-2 worker
 
 e2e:  ## Levanta el sistema en contenedores, migra, pasa E2E + smoke y para la aplicación
 	docker compose up -d --wait db
