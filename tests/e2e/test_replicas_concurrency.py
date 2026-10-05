@@ -33,8 +33,10 @@ def test_diez_reservas_repartidas_entre_dos_replicas_para_cinco_taquillas(
     def reservar(n: int) -> httpx.Response:
         replica = api_1 if n % 2 == 0 else api_2
         cuerpo = {"building_id": edificio, "size": "M", "tracking_ref": f"E2E-{lote}-{n}", "recipient": "vecino@example.com"}
+        # Cada reserva es una petición distinta: su propia Idempotency-Key, obligatoria desde F3
+        cabeceras = {**cabeceras_transportista, "Idempotency-Key": str(uuid.uuid4())}
         barrera.wait()
-        return httpx.post(f"{replica}/v1/deliveries", json=cuerpo, headers=cabeceras_transportista, timeout=10)
+        return httpx.post(f"{replica}/v1/deliveries", json=cuerpo, headers=cabeceras, timeout=10)
 
     with ThreadPoolExecutor(max_workers=10) as hilos:
         respuestas = list(hilos.map(reservar, range(10)))

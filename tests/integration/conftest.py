@@ -233,7 +233,10 @@ def crear_edificio(client: AsyncClient, cabeceras_operador: dict[str, str]) -> C
 
 
 class Reservar(Protocol):
-    """Reserva por la API: await reservar(cabeceras, edificio, size="M", tracking_ref="ES123")."""
+    """
+    Reserva por la API: await reservar(cabeceras, edificio, size="M", tracking_ref="ES123").
+    Con idempotency_key="..." se envía esa clave; sin ella, una clave nueva en cada llamada
+    """
 
     async def __call__(
         self,
@@ -242,12 +245,17 @@ class Reservar(Protocol):
         size: str = "M",
         tracking_ref: str = "ES123",
         recipient: str = "vecino@example.com",
+        idempotency_key: str | None = None,
     ) -> Response: ...
 
 
 @pytest.fixture
 def reservar(client: AsyncClient) -> Reservar:
-    """Ayudante para lanzar una reserva y devolver la respuesta tal cual, sin comprobar nada."""
+    """
+    Ayudante para lanzar una reserva y devolver la respuesta tal cual, sin comprobar nada.
+    Siempre envía la cabecera Idempotency-Key, obligatoria desde F3. Si el test no indica una clave, se genera una
+    nueva: cada llamada es una petición distinta, como en los tests de F2
+    """
 
     async def lanzar(
         cabeceras: dict[str, str],
@@ -255,9 +263,11 @@ def reservar(client: AsyncClient) -> Reservar:
         size: str = "M",
         tracking_ref: str = "ES123",
         recipient: str = "vecino@example.com",
+        idempotency_key: str | None = None,
     ) -> Response:
         cuerpo = {"building_id": building_id, "size": size, "tracking_ref": tracking_ref, "recipient": recipient}
-        return await client.post("/v1/deliveries", json=cuerpo, headers=cabeceras)
+        clave = idempotency_key if idempotency_key is not None else str(uuid.uuid4())
+        return await client.post("/v1/deliveries", json=cuerpo, headers={**cabeceras, "Idempotency-Key": clave})
 
     return lanzar
 
