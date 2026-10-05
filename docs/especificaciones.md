@@ -110,6 +110,8 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A18 | La API no se despliega y las claves son de desarrollo                              | Los valores de `.env.example` no son secretos reales                                           |
 | A19 | Las rutas inexistentes (404) y los métodos no permitidos (405) devuelven el JSON por defecto de FastAPI (`{"detail": ...}`); un error interno no controlado (500) devuelve el texto plano `Internal Server Error`, sin `X-Request-ID` | No están en el catálogo (§8.3); el contrato de `/v1` solo cubre las operaciones definidas. El traceback de un 500 se registra con `request_id` nulo, así que no se puede asociar a una petición |
 | A20 | Una reserva puede recibir `NO_LOCKER_AVAILABLE` aunque haya una taquilla que va a quedar libre: `SKIP LOCKED` salta las taquillas que otra reserva en curso tiene bloqueadas | Si otra reserva retiene la única taquilla libre de esa talla y después se deshace (por ejemplo, con `DUPLICATE_PACKAGE`), esta recibe el `409` aunque la taquilla vuelva a estar libre. Complementa a A10. El cliente puede reintentar; desde F3 es seguro con la misma `Idempotency-Key`, porque una reserva fallida no la guarda (I8) |
+| A21 | Un error de la propia base de datos al construir el aviso deja inutilizable la transacción del worker | El fallo no se puede apuntar: el evento no suma intentos, se reintenta en cada pausa y nunca llega a muerto. Es improbable (solo hay lecturas); un `SAVEPOINT` alrededor de construir y enviar lo evitaría |
+| A22 | Un `SIGTERM` recibido durante el primer segundo y pico de vida del contenedor del worker puede perderse | Todavía no se ha instalado el manejador de señales y Docker lo termina al acabar el plazo de gracia. En ese momento no hay ningún evento en curso, así que no se pierde nada |
 
 ---
 
@@ -419,7 +421,8 @@ Cuerpo `{"code": "483920"}` (exactamente seis dígitos; si no, `422`). En una tr
 3. El código no coincide con el derivado (§7.9) → `403 INVALID_PICKUP_CODE`. Nada cambia.
 4. `UPDATE deliveries SET status = 'PICKED_UP', picked_up_at = now() WHERE id = :id AND status = 'DEPOSITED'
    RETURNING ...`. Si no afecta a ninguna fila (otra recogida simultánea ganó) → `409 INVALID_STATE`.
-5. `UPDATE lockers SET status = 'FREE' WHERE id = :locker_id`.
+5. `UPDATE lockers SET status = 'FREE' WHERE id = :locker_id AND status = 'BUSY'` (I4). Si no afecta a ninguna fila,
+   algo va muy mal (una entrega `DEPOSITED` siempre ocupa su taquilla) y el error inesperado deshace toda la transacción.
 6. Responde `200` con la entrega.
 
 ### 7.8 Consultar — `GET /v1/deliveries/{delivery_id}` (transportista dueño)
@@ -475,8 +478,8 @@ enviar. Las constantes y el contenido viven en `outbox/events.py`.
    transacción confirme, se actualiza la fila:
    - `attempts = attempts + 1`.
    - Si `attempts` alcanza `OUTBOX_MAX_ATTEMPTS` → `next_attempt_at = NULL` (**evento muerto**).
-   - Si no → `next_attempt_at = now() + OUTBOX_BACKOFF_BASE_SECONDS × 2^attempts` segundos (con la base por defecto y
-     el nuevo valor de `attempts`: 2, 4, 8 y 16 s).
+   - Si no → `next_attempt_at = now() + OUTBOX_BACKOFF_BASE_SECONDS × 2^(attempts − 1)` segundos, con `attempts` ya
+     incrementado (con la base por defecto: 2, 4, 8 y 16 s).
 6. Devuelve `True`.
 
 **Notificador** (`outbox/notifier.py`). Un `Protocol` con `async def send(self, notification: Notification) -> None`.
@@ -836,6 +839,7 @@ provocar de verdad. Para la base de datos caída se usa una URL inalcanzable, no
 - Tests con nombre y docstring en castellano; helpers en castellano. Aserciones sobre el contenido de la respuesta.
 - Sin `sleep`: la espera es configurable (0 en tests) o se modifica `next_attempt_at` en la fila.
 - Concurrencia en integración: varias sesiones y `asyncio.gather`, con N ≤ 10. Entre procesos reales, solo en E2E.
+- Un test de concurrencia debe fallar al quitar la protección que dice probar (se comprueba con una mutación: quitar el bloqueo o la condición del `UPDATE`). Cuando el resultado de la carrera no se puede forzar, se añade un caso determinista bajo el mismo identificador: otra transacción retiene la fila sin confirmar, se espera sin `sleep` (consultando `pg_stat_activity`) a ver la petición parada en un bloqueo, y se comprueba el resultado al confirmar.
 - TDD: esqueleto, test rojo con `@pytest.mark.xfail(strict=True)`, implementación y retirada del marcador.
 - Los casos obligatorios de cada fase, con identificador, están en `docs/plan_fases.md`. Cada código de error del
   catálogo (§8.3) lo provoca al menos un test, y cada invariante (§6) tiene al menos un caso que la ejercita.
@@ -873,3 +877,4 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | 2026-10-04 | Primera versión       | Cierre de las 13 decisiones de diseño                   | —        |
 | 2026-10-05 | I10, A19 y §11        | Revisión de F0: contradicción detectada por Claude Code y familias sin código propio | — |
 | 2026-10-05 | A19, A20, I10 y §8.2  | Revisión de F2: el 500 es texto plano; el falso `409` por `SKIP LOCKED`; la capacidad no puede dar `403` | — |
+| 2026-10-06 | §7.7, §7.10, A21, A22 y §14.4 | Cierre del núcleo (F0 a F5): la liberación de la taquilla es condicional (I4); la espera de los reintentos es 2, 4, 8 y 16 s; dos limitaciones del worker; los tests de concurrencia deben fallar sin su protección | — |

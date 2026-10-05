@@ -217,10 +217,10 @@ consultar la capacidad, todo protegido con claves de API y roles.
 | F1-02 | U     | Formato de la etiqueta: `S-01`, `M-03`, `L-12`, `M-100`                                                               | `tests/unit/test_labels.py`                            |
 | F1-03 | I     | Sin clave o con clave inválida → `401 UNAUTHENTICATED` (parametrizado)                                                | `tests/integration/test_security_api.py`               |
 | F1-04 | I     | Rol equivocado → `403 FORBIDDEN` (un transportista no crea edificios ni taquillas)                                    | `tests/integration/test_security_api.py`               |
-| F1-05 | I     | El operador crea un edificio (`201`, `id` y `name`, espacios recortados); nombre vacío → `422 VALIDATION_ERROR`        | `tests/integration/test_buildings_api.py`              |
+| F1-05 | I     | El operador crea un edificio (`201`, `id` y `name`, espacios recortados); nombre vacío → `422 VALIDATION_ERROR`. Desde F3 la respuesta incluye también `country`, y la aserción pasa a esperar `"country": "ES"`        | `tests/integration/test_buildings_api.py`              |
 | F1-06 | I     | Alta de taquillas: etiquetas consecutivas por talla, todas `FREE`; `quantity > 1`; las tallas llevan contadores independientes | `tests/integration/test_lockers_api.py`      |
 | F1-07 | I     | `quantity` fuera de rango o talla inválida → `422`; edificio inexistente → `404 NOT_FOUND`                            | `tests/integration/test_lockers_api.py`                |
-| F1-08 | I     | Dos altas simultáneas de la misma talla → etiquetas `M-03` y `M-04`, sin errores ni duplicados                        | `tests/integration/test_lockers_concurrency.py`        |
+| F1-08 | I     | Dos altas simultáneas de la misma talla → etiquetas `M-03` y `M-04`, sin errores ni duplicados. **Segundo caso:** una transacción aparte retiene la fila del edificio sin confirmar y el alta por la API se queda esperando; al confirmar, termina con `201` (el primer caso puede pasar por azar sin el bloqueo)                        | `tests/integration/test_lockers_concurrency.py`        |
 | F1-09 | I     | Capacidad desglosada por talla (total y libres, con taquillas `BUSY` puestas por SQL), ordenada `S`, `M`, `L`          | `tests/integration/test_capacity_api.py`               |
 | F1-10 | I     | Capacidad: edificio sin taquillas → `sizes: []`; inexistente → `404`; un transportista puede consultarla              | `tests/integration/test_capacity_api.py`               |
 | F1-11 | I     | Los `CHECK` de `size` y `status` rechazan valores inválidos (repositorio directo, `constraint_name` correcto)          | `tests/integration/test_lockers_repository.py`         |
@@ -374,14 +374,14 @@ Que reintentar una reserva no cree una segunda, y demostrar una migración que c
 | F3-01 | U     | Huella: el mismo cuerpo da la misma huella aunque cambie el orden de los campos; un cuerpo distinto, otra huella       | `tests/unit/test_fingerprint.py`                       |
 | F3-02 | I     | Misma clave y mismo cuerpo → `201` con la **misma respuesta**, y una sola entrega y una sola taquilla ocupada          | `tests/integration/test_idempotency_api.py`            |
 | F3-03 | I     | Misma clave y otro cuerpo → `422 IDEMPOTENCY_KEY_REUSED`, sin cambios                                                  | `tests/integration/test_idempotency_api.py`            |
-| F3-04 | I     | Dos peticiones **idénticas simultáneas** → una sola entrega y dos `201` iguales                                        | `tests/integration/test_idempotency_concurrency.py`    |
+| F3-04 | I     | Dos peticiones **idénticas simultáneas** → una sola entrega y dos `201` iguales. **Segundo caso (determinista):** una transacción aparte registra la clave sin confirmar; la reserva idéntica por la API espera y, al confirmar la otra con su respuesta guardada, devuelve `201` con exactamente esa respuesta, sin crear ninguna entrega                                        | `tests/integration/test_idempotency_concurrency.py`    |
 | F3-05 | I     | Clave nueva y mismo paquete → `409 DUPLICATE_PACKAGE`, y la clave **no** queda guardada                                | `tests/integration/test_idempotency_api.py`            |
 | F3-06 | I     | Falta `Idempotency-Key` → `422 VALIDATION_ERROR`                                                                       | `tests/integration/test_idempotency_api.py`            |
 | F3-07 | I     | Una reserva fallida no guarda la clave: tras `409 NO_LOCKER_AVAILABLE` y liberar una taquilla, el reintento con la misma clave funciona | `tests/integration/test_idempotency_api.py` |
 | F3-08 | I     | La clave es por transportista: la misma clave de dos transportistas da dos entregas independientes                      | `tests/integration/test_idempotency_api.py`            |
 | F3-09 | I     | El reintento devuelve la respuesta **original** aunque la entrega haya cambiado de estado (se cambia por SQL)           | `tests/integration/test_idempotency_api.py`            |
 | F3-10 | I     | **Migración con datos:** se migra hasta la revisión anterior, se insertan edificios, se migra a la de `country`: se conservan y quedan con `ES`; bajar y volver a subir conserva los datos | `tests/integration/test_migrations.py` |
-| F3-11 | I     | `POST /v1/buildings` con `country` opcional (por defecto `ES`) y respuesta con `country`; formato inválido → `422`; `ck_buildings_country_format` rechaza `es` y `ESP` en la base de datos | `tests/integration/test_buildings_api.py` |
+| F3-11 | I     | `POST /v1/buildings` con `country` opcional (por defecto `ES`) y respuesta con `country`; formato inválido → `422`; `ck_buildings_country_format` rechaza `es` y `E1` en la base de datos (`ESP` no llega al `CHECK`: la columna es `varchar(2)` y se rechaza antes por longitud, SQLSTATE `22001`) | `tests/integration/test_buildings_api.py` |
 
 ### Criterios de aceptación
 
@@ -456,15 +456,15 @@ residente recoge con el código derivado, y el transportista consulta su entrega
 | F4-01 | U     | Código de recogida: determinista; 6 dígitos con ceros a la izquierda; distinto por `id` y por secreto; `matches` acepta el correcto y rechaza el incorrecto | `tests/unit/test_pickup_code.py` |
 | F4-02 | I     | Depositar: `PENDING` → `DEPOSITED`, con `deposited_at` y `200`                                                         | `tests/integration/test_deposit_api.py`                |
 | F4-03 | I     | Depositar escribe el evento `delivery.deposited` con `payload.delivery_id`, en la misma transacción                     | `tests/integration/test_deposit_api.py`                |
-| F4-04 | I     | Depositar dos veces → `200` y **un solo** evento                                                                        | `tests/integration/test_deposit_api.py`                |
+| F4-04 | I     | Depositar dos veces → `200` y **un solo** evento. **Segundo caso:** otra transacción hace el depósito sin confirmar; el depósito por la API espera y, al confirmar, responde `200` con un solo evento                                                                        | `tests/integration/test_deposit_api.py`                |
 | F4-05 | I     | Depositar entrega ajena o inexistente → `404`; entrega `PICKED_UP` → `409 INVALID_STATE`; operador → `403`              | `tests/integration/test_deposit_api.py`                |
-| F4-06 | I     | Atomicidad: dentro de una transacción, si algo falla después de depositar, ni el estado ni el evento persisten (sin dobles) | `tests/integration/test_deposit_transaction.py`   |
+| F4-06 | I     | Atomicidad: dentro de una transacción, si algo falla después de depositar, ni el estado ni el evento persisten (sin dobles). **Segundo caso (servicio):** un `trigger` real de PostgreSQL hace fallar el `INSERT` del evento; depositar por la API falla y la entrega sigue `PENDING` | `tests/integration/test_deposit_transaction.py`   |
 | F4-07 | I     | Consultar: la propia → `200`; ajena o inexistente → `404`; operador → `403`                                             | `tests/integration/test_deliveries_api.py`             |
 | F4-08 | I     | Recoger con el código correcto → `200`, `PICKED_UP`, `picked_up_at` y la taquilla vuelve a `FREE`                       | `tests/integration/test_pickup_api.py`                 |
-| F4-09 | I     | Código incorrecto → `403 INVALID_PICKUP_CODE` y nada cambia; mal formado → `422`; entrega inexistente → `404`           | `tests/integration/test_pickup_api.py`                 |
-| F4-10 | I     | Recoger una entrega sin depositar, o recoger dos veces → `409 INVALID_STATE`                                            | `tests/integration/test_pickup_api.py`                 |
-| F4-11 | I     | Dos recogidas simultáneas con el código correcto → una `200` y una `409`                                                | `tests/integration/test_pickup_concurrency.py`         |
-| F4-12 | I     | El código no aparece como valor en ninguna respuesta (reservar, depositar, consultar, recoger)                           | `tests/integration/test_pickup_api.py`                 |
+| F4-09 | I     | Código incorrecto → `403 INVALID_PICKUP_CODE` y nada cambia; mal formado → `422`; entrega inexistente → `404`. El código son exactamente seis cifras `[0-9]` (no `\d`, que acepta cifras de otros alfabetos)           | `tests/integration/test_pickup_api.py`                 |
+| F4-10 | I     | Recoger una entrega sin depositar, o recoger dos veces → `409 INVALID_STATE`. Recoger con un código incorrecto una entrega sin depositar → `409` (el estado se comprueba antes que el código)                                            | `tests/integration/test_pickup_api.py`                 |
+| F4-11 | I     | Dos recogidas simultáneas con el código correcto → una `200` y una `409`. **Segundo caso:** otra transacción hace el `UPDATE` a `PICKED_UP` sin confirmar; la recogida por la API espera y, al confirmar, responde `409`                                                | `tests/integration/test_pickup_concurrency.py`         |
+| F4-12 | I     | El código no aparece como valor en ninguna respuesta (reservar, depositar, consultar, recoger), ni en los registros de log al recoger con un código incorrecto                           | `tests/integration/test_pickup_api.py`                 |
 | F4-13 | I     | Ciclo completo: tras recoger, la taquilla puede volver a reservarse                                                     | `tests/integration/test_pickup_api.py`                 |
 | F4-14 | E     | Flujo completo contra el sistema: reservar, depositar y recoger con el código derivado                                   | `tests/e2e/test_delivery_flow.py`                      |
 
@@ -542,18 +542,18 @@ deja los fallidos reactivables. Con esta fase el núcleo queda completo.
 
 | ID    | Nivel | Qué comprueba                                                                                                         | Fichero sugerido                                       |
 | ----- | ----- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| F5-01 | U     | Espera = base × 2^`attempts` (y 0 con base 0); regla de agotamiento: al alcanzar el máximo, el evento queda muerto       | `tests/unit/test_outbox_retry_rules.py`                |
+| F5-01 | U     | Espera tras el fallo n = base × 2^(n − 1) (2, 4, 8 y 16 s con base 2; 0 con base 0); regla de agotamiento: al alcanzar el máximo, el evento queda muerto       | `tests/unit/test_outbox_retry_rules.py`                |
 | F5-02 | I     | Envío correcto: el notificador recibe `event_id`, destinatario, taquilla, edificio y el **código correcto**; la fila se borra y `process_next` devuelve `True` | `tests/integration/test_outbox_service.py` |
 | F5-03 | I     | Cola vacía → `False` sin efectos; un evento con `next_attempt_at` futuro no se toma                                      | `tests/integration/test_outbox_service.py`            |
 | F5-04 | I     | Fallo del notificador: `attempts` = 1 y `next_attempt_at` en el futuro; el evento sigue en la tabla                      | `tests/integration/test_outbox_service.py`            |
 | F5-05 | I     | Cinco fallos seguidos → evento muerto (`attempts` = 5 y `next_attempt_at` nulo), y `process_next` ya no lo toma          | `tests/integration/test_outbox_service.py`            |
 | F5-06 | I     | Reactivar un evento muerto con el `UPDATE` documentado → se procesa y se borra                                           | `tests/integration/test_outbox_service.py`            |
-| F5-07 | I     | Dos workers a la vez con N eventos → cada evento se notifica **exactamente una vez** y la tabla queda vacía             | `tests/integration/test_outbox_concurrency.py`        |
+| F5-07 | I     | Dos workers a la vez con N eventos → cada evento se notifica **exactamente una vez** y la tabla queda vacía. **Segundo caso:** otra transacción bloquea el evento más antiguo sin confirmar; `process_next` procesa el siguiente sin esperar y, después, devuelve `False` con el bloqueado intacto             | `tests/integration/test_outbox_concurrency.py`        |
 | F5-08 | I     | Reenvío: el notificador graba y luego falla; en la siguiente pasada se envía de nuevo **con el mismo `event_id`**         | `tests/integration/test_outbox_service.py`            |
 | F5-09 | I     | Un evento cuya entrega no existe cuenta como fallo y el bucle sigue                                                      | `tests/integration/test_outbox_service.py`            |
-| F5-10 | I     | `LogNotifier` escribe una línea JSON con `event_id`, `delivery_id` y el mensaje                                          | `tests/integration/test_log_notifier.py`              |
-| F5-11 | I     | El worker se detiene al pedirlo, sin esperar a la pausa completa                                                         | `tests/integration/test_worker.py`                    |
-| F5-12 | E     | Tras depositar contra el sistema real, el worker vacía el outbox (≤ 10 s)                                                | `tests/e2e/test_worker_drains_outbox.py`              |
+| F5-10 | I     | `LogNotifier` escribe una línea JSON con `event_id`, `delivery_id` y el mensaje. Y el `repr` del aviso no contiene el código                                          | `tests/integration/test_log_notifier.py`              |
+| F5-11 | I     | El worker se detiene al pedirlo, sin esperar a la pausa completa. **Segundo caso:** contra una base de datos sin migrar, el bucle registra el error y sigue vivo; al migrar, procesa un evento                                                         | `tests/integration/test_worker.py`                    |
+| F5-12 | E     | Tras depositar contra el sistema real, el worker envía el aviso y borra el evento de esa entrega (≤ 10 s)                                                | `tests/e2e/test_worker_drains_outbox.py`              |
 
 ### Criterios de aceptación
 
