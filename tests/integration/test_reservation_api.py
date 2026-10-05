@@ -89,7 +89,6 @@ async def test_reservar_en_un_edificio_inexistente_devuelve_404(
     assert await entregas(session) == []
 
 
-@pytest.mark.xfail(strict=True, reason="F2: falta traducir el IntegrityError a DuplicatePackageError")
 async def test_reservar_un_paquete_con_reserva_activa_devuelve_409(
     session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
 ) -> None:
