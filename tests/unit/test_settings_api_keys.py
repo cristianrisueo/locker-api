@@ -3,7 +3,7 @@ import json
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from locker.core.config import Settings
 
@@ -13,11 +13,14 @@ URL_CUALQUIERA = "postgresql+asyncpg://x:x@localhost:5432/x"
 CLAVE_OPERADOR = "clave-operador-0000000000"
 CLAVE_SEUR = "clave-seur-00000000000000"
 
+# Obligatorio desde F4: sin él la configuración no se crea, aunque estos tests no lo usen
+SECRETO_RECOGIDA = "secreto-recogida-0000000000000000"
+
 
 def crear_settings(monkeypatch: pytest.MonkeyPatch, api_keys: list[dict[str, Any]]) -> Settings:
     """Crea la configuración leyendo API_KEYS del entorno, en JSON de una línea, como la lee la API al arrancar."""
     monkeypatch.setenv("API_KEYS", json.dumps(api_keys))
-    return Settings(database_url=URL_CUALQUIERA, _env_file=None)
+    return Settings(database_url=URL_CUALQUIERA, pickup_code_secret=SecretStr(SECRETO_RECOGIDA), _env_file=None)
 
 
 def test_api_keys_valida_se_lee_del_json(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -42,3 +42,11 @@ class Delivery(BaseModel):
     recipient: str
     deposited_at: datetime | None
     picked_up_at: datetime | None
+
+
+class PickupIn(BaseModel):
+    """Datos para recoger un paquete: solo el código que recibió el residente."""
+
+    # Exactamente seis cifras del 0 al 9, en texto (los ceros a la izquierda cuentan). Se escribe [0-9] y no \d
+    # porque \d también acepta cifras de otros alfabetos («٤٨٣٩٢٠»), que nunca pueden ser un código válido
+    code: str = Field(pattern=r"^[0-9]{6}$", description="Código de recogida de seis cifras", examples=["483920"])

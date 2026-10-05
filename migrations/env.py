@@ -14,6 +14,7 @@ from locker.core.database import Base
 from locker.deliveries.models import DeliveryModel  # noqa: F401  (registra la tabla en Base.metadata)
 from locker.idempotency.models import IdempotencyKeyModel  # noqa: F401  (registra la tabla en Base.metadata)
 from locker.lockers.models import LockerModel  # noqa: F401  (registra la tabla en Base.metadata)
+from locker.outbox.models import OutboxEventModel  # noqa: F401  (registra la tabla en Base.metadata)
 
 # Configuración leída de alembic.ini
 config = context.config

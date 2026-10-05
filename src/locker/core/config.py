@@ -66,6 +66,11 @@ class Settings(DatabaseSettings):
     # Claves de API, leídas del JSON de una línea de API_KEYS. Obligatoria y con al menos una entrada
     api_keys: list[ApiKey] = Field(min_length=1)
 
+    # Secreto con el que se calcula el código de recogida (deliveries/pickup_code.py). Obligatorio y de al menos
+    # 32 caracteres. SecretStr, como las claves de API: nunca sale en claro al imprimir la configuración.
+    # No está en DatabaseSettings: migrar no lo necesita
+    pickup_code_secret: SecretStr = Field(min_length=32)
+
     @field_validator("api_keys")
     @classmethod
     def keys_are_unique(cls, api_keys: list[ApiKey]) -> list[ApiKey]:
