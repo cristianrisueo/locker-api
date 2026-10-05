@@ -43,6 +43,17 @@ def restriccion_violada(error: IntegrityError) -> tuple[str | None, str | None]:
     return getattr(original, "sqlstate", None), getattr(original and original.__cause__, "constraint_name", None)
 
 
+async def bloqueos_en_espera(observador: AsyncSession) -> int:
+    """
+    Cuántas sesiones de esta base de datos están esperando a un bloqueo, según pg_stat_activity.
+    PostgreSQL congela esa vista durante cada transacción: se cierra tras leerla para que la siguiente lectura sea nueva
+    """
+    consulta = text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'")
+    esperando = int((await observador.execute(consulta)).scalar_one())
+    await observador.rollback()
+    return esperando
+
+
 class AlembicRunner(Protocol):
     """Lanza un comando de Alembic contra una URL: alembic("postgresql+asyncpg://...", "upgrade", "head")."""
 
