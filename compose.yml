@@ -1,0 +1,68 @@
+# Bloque de configuración común de los servicios de la aplicación: misma imagen, mismas variables
+# El .env apunta a localhost (para `make run o tests - menos los e2e que usan testcontainers`);
+x-app: &app
+  build: .
+  image: locker:local
+  profiles: ["app"]
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://locker:locker@db:5432/locker
+  depends_on:
+    db:
+      condition: service_healthy
+
+# Bloque de configuración común para las réplicas de la API en contenedor: la imagen slim no trae curl, así
+# que el healthcheck usa Python. /health comprueba también la base de datos: la réplica solo está sana si llega a ella
+x-api: &api
+  <<: *app
+  healthcheck:
+    test:
+      [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
+      ]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 5s
+
+services:
+  # Servicio de base de datos PostgreSQL.
+  db:
+    image: postgres:18
+    container_name: locker-db
+    environment:
+      POSTGRES_USER: locker
+      POSTGRES_PASSWORD: locker
+      POSTGRES_DB: locker
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U locker -d locker"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Servicio de migración de base de datos. Se ejecuta una vez y termina. No se expone. Lo creo porque al tener
+  # dos réplicas de la API podría haber un problema de concurrencia si ambas intentan migrar a la vez desde la propia API.
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+
+  # Dos réplicas de la API. Puertos 8001 y 8002 para no chocar
+  api-1:
+    <<: *api
+    ports:
+      - "8001:8000"
+
+  api-2:
+    <<: *api
+    ports:
+      - "8002:8000"
+
+volumes:
+  pgdata:

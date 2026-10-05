@@ -1,0 +1,38 @@
+# Integración continua: en cada push a main y en cada PR pasa las comprobaciones y los tests.
+# Los tests de integración usan testcontainers. Los E2E no se ejecutan.
+name: CI
+
+# Al hacer un push a main o un PR
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Solo permite lecturas del repositorio
+permissions:
+  contents: read
+
+# Si llega un push nuevo a la misma rama, cancela la ejecución anterior
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# El job de CI se ejecuta en un contenedor Ubuntu, instala uv y las dependencias exactas de uv.lock, y ejecuta make check y make test.
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      - run: make check
+
+      - run: git diff --exit-code
+
+      - run: make test

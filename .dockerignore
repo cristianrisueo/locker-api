@@ -1,0 +1,14 @@
+# Fuera de la imagen: entorno local, secretos, tests, cachés y artefactos
+.venv/
+.env
+.git/
+.github/
+.vscode/
+tests/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
