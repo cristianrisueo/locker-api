@@ -38,6 +38,14 @@ class PickedUpDelivery(NamedTuple):
     locker_id: uuid.UUID
 
 
+class DeliveryNotice(NamedTuple):
+    """Lo mínimo para avisar al residente de una entrega: a quién, en qué taquilla y en qué edificio."""
+
+    recipient: str
+    locker_label: str
+    building_name: str
+
+
 class DeliveryRepository(Protocol):
     """Interfaz de acceso a datos. Cualquier clase con estos métodos la cumple."""
 
@@ -53,6 +61,9 @@ class DeliveryRepository(Protocol):
 
     # Pasa la entrega de DEPOSITED a PICKED_UP y la devuelve con su taquilla. None si no ha cambiado ninguna fila
     async def pick_up(self, delivery_id: uuid.UUID) -> PickedUpDelivery | None: ...
+
+    # Lee el destinatario, la etiqueta de la taquilla y el nombre del edificio de la entrega. None si no existe
+    async def get_notice(self, delivery_id: uuid.UUID) -> DeliveryNotice | None: ...
 
 
 class SqlDeliveryRepository:
@@ -194,3 +205,7 @@ class SqlDeliveryRepository:
         if row is None:
             return None
         return PickedUpDelivery(Delivery.model_validate(row, from_attributes=True), row.locker_id)
+
+    async def get_notice(self, delivery_id: uuid.UUID) -> DeliveryNotice | None:
+        """Lee los datos del aviso de la entrega."""
+        raise NotImplementedError

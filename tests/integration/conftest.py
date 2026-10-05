@@ -22,7 +22,10 @@ from testcontainers.community.postgres import PostgresContainer
 
 from locker.core.config import ApiKey, DatabaseSettings, Settings, get_settings
 from locker.core.database import Base, create_engine, create_session_factory, get_session
+from locker.deliveries.repository import SqlDeliveryRepository
 from locker.main import app  # importar la app registra todos los modelos en Base.metadata
+from locker.outbox.repository import SqlOutboxRepository
+from locker.outbox.service import OutboxService
 from tests.integration.notificador_falso import NotificadorFalso
 
 # Raíz del repositorio, donde está alembic.ini
@@ -313,3 +316,70 @@ async def bd_migraciones(postgres: PostgresContainer) -> AsyncIterator[str]:
 def notificador() -> NotificadorFalso:
     """Un NotificadorFalso nuevo en cada test, que envía sin fallar hasta que el test le diga otra cosa."""
     return NotificadorFalso()
+
+
+@pytest.fixture(scope="session")
+def ajustes_outbox(settings: Settings) -> Settings:
+    """
+    La configuración de los tests con OUTBOX_BACKOFF_BASE_SECONDS = 0: un evento que falla vuelve a estar vencido
+    al instante, y los tests de reintentos no tienen que esperar ni dormir
+    """
+    return settings.model_copy(update={"outbox_backoff_base_seconds": 0})
+
+
+class Procesar(Protocol):
+    """
+    Una pasada del worker: await procesar() procesa el siguiente evento vencido y devuelve lo que devuelve
+    process_next. Con ajustes=... usa esa configuración en vez de ajustes_outbox
+    """
+
+    async def __call__(self, ajustes: Settings | None = None) -> bool: ...
+
+
+@pytest.fixture
+def procesar(
+    session_factory: async_sessionmaker[AsyncSession], notificador: NotificadorFalso, ajustes_outbox: Settings
+) -> Procesar:
+    """
+    Llama a process_next como lo hace el worker: con una sesión nueva en cada pasada, los repositorios de
+    PostgreSQL y el NotificadorFalso del test
+    """
+
+    async def una_pasada(ajustes: Settings | None = None) -> bool:
+        async with session_factory() as s:
+            servicio = OutboxService(
+                s, SqlOutboxRepository(s), SqlDeliveryRepository(s), notificador, ajustes or ajustes_outbox
+            )
+            return await servicio.process_next()
+
+    return una_pasada
+
+
+class Depositar(Protocol):
+    """
+    Deposita entregas por la API: await depositar(3) crea un edificio con 3 taquillas M, reserva y deposita un
+    paquete en cada una, y devuelve los ids de las entregas en orden. Cada depósito apunta su evento
+    """
+
+    async def __call__(self, cuantas: int = 1) -> list[uuid.UUID]: ...
+
+
+@pytest.fixture
+def depositar(
+    client: AsyncClient, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
+) -> Depositar:
+    """Ayudante para tener eventos reales en el outbox: los apunta el depósito, como en producción."""
+
+    async def lanzar(cuantas: int = 1) -> list[uuid.UUID]:
+        edificio = await crear_edificio({"M": cuantas})
+        entregas: list[uuid.UUID] = []
+        for _ in range(cuantas):
+            # Referencia única: un test puede depositar varias veces
+            reserva = await reservar(cabeceras_transportista, edificio, tracking_ref=f"ES{uuid.uuid4().hex[:8]}")
+            assert reserva.status_code == 201
+            deposito = await client.post(f"/v1/deliveries/{reserva.json()['id']}/deposit", headers=cabeceras_transportista)
+            assert deposito.status_code == 200
+            entregas.append(uuid.UUID(deposito.json()["id"]))
+        return entregas
+
+    return lanzar
