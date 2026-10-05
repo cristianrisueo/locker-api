@@ -7,7 +7,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-@pytest.mark.xfail(strict=True, reason="el alta de edificios todavía no está implementada")
 async def test_operador_crea_edificio_con_el_nombre_recortado(
     client: AsyncClient, session: AsyncSession, cabeceras_operador: dict[str, str]
 ) -> None:

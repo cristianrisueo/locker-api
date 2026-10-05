@@ -13,4 +13,7 @@ class BuildingService:
 
     async def create(self, data: BuildingIn) -> Building:
         """Crea un edificio y lo devuelve con su identificador."""
-        raise NotImplementedError
+
+        # La transacción es lo primero del caso de uso: al salir del bloque se confirma, y si hay un error se deshace
+        async with self._session.begin():
+            return await self._repository.add(data)

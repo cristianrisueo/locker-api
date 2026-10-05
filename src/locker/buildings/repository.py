@@ -3,6 +3,7 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from locker.buildings.models import BuildingModel
 from locker.buildings.schemas import Building, BuildingIn
 
 
@@ -22,4 +23,14 @@ class SqlBuildingRepository:
 
     async def add(self, data: BuildingIn) -> Building:
         """Inserta un edificio y lo devuelve con el id generado."""
-        raise NotImplementedError
+
+        # Crea un modelo de SQLAlchemy a partir del schema de Pydantic que viene de la API
+        model = BuildingModel(name=data.name)
+
+        # Lo apunta en la sesión y envía el INSERT con flush, sin confirmar: el commit lo hace el servicio
+        # al cerrar su transacción. El id (UUID v7) lo genera la aplicación al enviar la fila
+        self._session.add(model)
+        await self._session.flush()
+
+        # Convierte el modelo de SQLAlchemy a un schema de Pydantic para devolverlo
+        return Building.model_validate(model, from_attributes=True)
