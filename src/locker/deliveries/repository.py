@@ -14,19 +14,6 @@ from locker.lockers.schemas import Locker
 UNIQUE_VIOLATION = "23505"
 
 
-def is_violation_of(error: IntegrityError, sqlstate: str, constraint: str) -> bool:
-    """
-    Dice si el IntegrityError es la violación de esa restricción concreta.
-    error.orig es el error del driver adaptado por SQLAlchemy (lleva el sqlstate) y su causa es la
-    excepción original de asyncpg (lleva constraint_name)
-    """
-    original = error.orig
-    return (
-        getattr(original, "sqlstate", None) == sqlstate
-        and getattr(original.__cause__ if original else None, "constraint_name", None) == constraint
-    )
-
-
 class DeliveryRepository(Protocol):
     """Interfaz de acceso a datos. Cualquier clase con estos métodos la cumple."""
 
@@ -45,7 +32,7 @@ class SqlDeliveryRepository:
     async def add(self, locker: Locker, carrier: str, data: ReservationIn) -> Delivery:
         """
         Inserta la entrega en la taquilla asignada y la devuelve con los datos de esa taquilla.
-        No se comprueba antes con un SELECT si el paquete ya tiene una entrega activa (I2): lo impide el índice
+        No se comprueba antes con un SELECT si el paquete ya tiene una entrega activa: lo impide el índice
         uq_deliveries_active_package, y aquí solo se traduce su error
         """
 
@@ -56,14 +43,20 @@ class SqlDeliveryRepository:
             .values(locker_id=locker.id, carrier=carrier, tracking_ref=data.tracking_ref, recipient=data.recipient)
             .returning(DeliveryModel)
         )
+
+        # La causa del error de integridad es la que tiene el código SQLSTATE 23505 (violación de unicidad)
+        # Si es por el índice uq_deliveries_active_package, se traduce a DuplicatePackageError
         try:
             model = (await self._session.scalars(stmt)).one()
         except IntegrityError as exc:
-            # Solo se traduce la violación del índice de paquete activo. Cualquier otra se relanza tal cual.
-            # Sin rollback: la transacción es del servicio, y el error al salir de su bloque begin() la deshace
-            # entera (también la taquilla que se acababa de ocupar)
-            if is_violation_of(exc, UNIQUE_VIOLATION, "uq_deliveries_active_package"):
+            causa = exc.orig.__cause__ if exc.orig else None
+
+            if (
+                getattr(exc.orig, "sqlstate", None) == UNIQUE_VIOLATION
+                and getattr(causa, "constraint_name", None) == "uq_deliveries_active_package"
+            ):
                 raise DuplicatePackageError from exc
+
             raise
 
         # La respuesta junta la fila de la entrega con el edificio, la etiqueta y la talla de su taquilla.
