@@ -25,6 +25,7 @@ RUN uv sync --locked --no-dev
 RUN useradd --system --no-create-home app
 USER app
 
+# Añade al PATH el entorno virtual (lo creó uv sync), expone el puerto y arranca la API
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
 CMD ["uvicorn", "locker.main:app", "--host", "0.0.0.0", "--port", "8000"]
