@@ -2,7 +2,6 @@
 # El notificador es el NotificadorFalso (§14.3); todo lo demás es real.
 from typing import Any
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +17,6 @@ async def eventos(session: AsyncSession) -> list[dict[str, Any]]:
     return [dict(fila._mapping) for fila in filas]
 
 
-@pytest.mark.xfail(strict=True, reason="F5-02: falta process_next")
 async def test_un_envio_correcto_lleva_el_codigo_y_borra_el_evento(
     session: AsyncSession, procesar: Procesar, depositar: Depositar, notificador: NotificadorFalso
 ) -> None:
@@ -47,14 +45,12 @@ async def test_un_envio_correcto_lleva_el_codigo_y_borra_el_evento(
     assert await eventos(session) == []
 
 
-@pytest.mark.xfail(strict=True, reason="F5-03: falta process_next")
 async def test_con_la_cola_vacia_devuelve_false(procesar: Procesar, notificador: NotificadorFalso) -> None:
     """«[F5-03]» Sin eventos, process_next devuelve False y no envía nada."""
     assert await procesar() is False
     assert notificador.recibidas == []
 
 
-@pytest.mark.xfail(strict=True, reason="F5-03: falta process_next")
 async def test_un_evento_que_aun_no_ha_vencido_no_se_toma(
     session: AsyncSession, procesar: Procesar, depositar: Depositar, notificador: NotificadorFalso
 ) -> None:

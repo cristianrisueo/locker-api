@@ -1,11 +1,15 @@
 # Capa de servicio del outbox: enviar el aviso de un evento pendiente y, si falla, programar el reintento.
 # Lo usa el worker (worker.py), un proceso aparte con el mismo código que la API.
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.core.config import Settings
+from locker.deliveries import pickup_code
 from locker.deliveries.repository import DeliveryRepository
-from locker.outbox.notifier import Notifier
-from locker.outbox.repository import OutboxRepository
+from locker.outbox.events import DELIVERY_DEPOSITED
+from locker.outbox.notifier import MESSAGE, Notification, Notifier
+from locker.outbox.repository import OutboxEvent, OutboxRepository
 
 
 def retry_delay_seconds(attempts: int, base_seconds: float) -> float:
@@ -35,6 +39,10 @@ class OutboxService:
         notifier: Notifier,
         settings: Settings,
     ) -> None:
+        """
+        Recibe una sesión (para abrir la transacción), los repositorios que la usan (el del outbox y el de entregas),
+        el notificador que envía el aviso y la configuración: el secreto del código y las reglas de reintento
+        """
         self._session = session
         self._outbox = outbox
         self._deliveries = deliveries
@@ -42,5 +50,53 @@ class OutboxService:
         self._settings = settings
 
     async def process_next(self) -> bool:
-        """Procesa el siguiente evento vencido. False si no había ninguno."""
-        raise NotImplementedError
+        """
+        Procesa el siguiente evento vencido (§7.10), todo en una transacción: lo toma, construye el aviso, lo envía
+        y borra el evento. Devuelve False si no había ningún evento que procesar, y True si ha procesado uno.
+        La transacción queda abierta mientras se envía el aviso (A3): así el evento sigue bloqueado y ningún otro
+        worker lo envía a la vez
+        """
+
+        # Crea la transacción: al salir del bloque se confirma, y si hay un error se deshace
+        async with self._session.begin():
+            # 1. Toma el evento vencido más antiguo que no tenga otro worker. Si no hay ninguno, no hay nada que hacer
+            event = await self._outbox.take_due()
+            if event is None:
+                return False
+
+            # 2. Construye el aviso y se lo pasa al notificador
+            notification = await self._build_notification(event)
+            await self._notifier.send(notification)
+
+            # 3. Enviado: borra el evento, que se confirma al salir del bloque
+            await self._outbox.delete(event.id)
+            return True
+
+    async def _build_notification(self, event: OutboxEvent) -> Notification:
+        """
+        Construye el aviso del evento. El evento solo lleva el id de la entrega (I7): el destinatario, la taquilla y el
+        edificio se leen ahora, y el código se calcula con el secreto, como al recoger. Lanza un error si el evento
+        no es de un tipo conocido o si su entrega no existe
+        """
+
+        # Hoy solo hay un tipo de evento: cualquier otro no se sabría avisar
+        if event.type != DELIVERY_DEPOSITED:
+            raise ValueError(f"Tipo de evento desconocido: {event.type}")
+
+        # Lee los datos de la entrega. Si ya no existe, no hay a quién avisar
+        delivery_id = uuid.UUID(event.payload["delivery_id"])
+        notice = await self._deliveries.get_notice(delivery_id)
+        if notice is None:
+            raise LookupError(f"La entrega {delivery_id} no existe")
+
+        # Calcula el código de recogida, el mismo que comprobará la recogida, y escribe el texto del aviso
+        code = pickup_code.derive(self._settings.pickup_code_secret.get_secret_value(), delivery_id)
+        return Notification(
+            event_id=event.id,
+            delivery_id=delivery_id,
+            recipient=notice.recipient,
+            building_name=notice.building_name,
+            locker_label=notice.locker_label,
+            pickup_code=code,
+            message=MESSAGE.format(label=notice.locker_label, building=notice.building_name, code=code),
+        )
