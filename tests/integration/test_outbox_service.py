@@ -94,7 +94,6 @@ async def test_un_evento_que_aun_no_ha_vencido_no_se_toma(
     assert await eventos(session) == antes
 
 
-@pytest.mark.xfail(strict=True, reason="F5-04: falta registrar el fallo")
 async def test_un_fallo_del_notificador_programa_el_reintento(
     session: AsyncSession,
     procesar: Procesar,
@@ -136,7 +135,6 @@ async def test_un_fallo_del_notificador_programa_el_reintento(
         assert codigo not in JsonFormatter().format(registro)
 
 
-@pytest.mark.xfail(strict=True, reason="F5-05: falta el estado muerto")
 async def test_cinco_fallos_seguidos_dejan_el_evento_muerto(
     session: AsyncSession, procesar: Procesar, depositar: Depositar, notificador: NotificadorFalso
 ) -> None:

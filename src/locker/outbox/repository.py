@@ -1,8 +1,9 @@
 # Repositorio del outbox: define la interfaz y su implementación sobre PostgreSQL.
 import uuid
+from datetime import timedelta
 from typing import Any, NamedTuple, Protocol
 
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from locker.outbox.models import OutboxEventModel
@@ -83,5 +84,19 @@ class SqlOutboxRepository:
         await self._session.execute(delete(OutboxEventModel).where(OutboxEventModel.id == event_id))
 
     async def record_failure(self, event_id: uuid.UUID, attempts: int, retry_in_seconds: float | None) -> None:
-        """Apunta un envío fallido."""
-        raise NotImplementedError
+        """
+        Apunta un envío fallido en la fila, ya bloqueada por take_due en esta misma transacción:
+
+        UPDATE outbox_events SET attempts = :attempts, next_attempt_at = now() + :espera   -- o NULL si muere
+        WHERE id = :id
+
+        La hora del reintento la calcula la base de datos con now() (A12); aquí solo llegan los segundos de espera
+        """
+
+        # Sin espera, el evento queda muerto: next_attempt_at nulo, y take_due ya no lo toma
+        next_attempt_at = None if retry_in_seconds is None else func.now() + timedelta(seconds=retry_in_seconds)
+        await self._session.execute(
+            update(OutboxEventModel)
+            .where(OutboxEventModel.id == event_id)
+            .values(attempts=attempts, next_attempt_at=next_attempt_at)
+        )

@@ -1,5 +1,6 @@
 # Capa de servicio del outbox: enviar el aviso de un evento pendiente y, si falla, programar el reintento.
 # Lo usa el worker (worker.py), un proceso aparte con el mismo código que la API.
+import logging
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,9 @@ from locker.deliveries.repository import DeliveryRepository
 from locker.outbox.events import DELIVERY_DEPOSITED
 from locker.outbox.notifier import MESSAGE, Notification, Notifier
 from locker.outbox.repository import OutboxEvent, OutboxRepository
+
+# Logger de los fallos de envío. Registra el id del evento y el error, nunca el aviso: el código no sale de aquí (I7)
+logger = logging.getLogger(__name__)
 
 
 def retry_delay_seconds(attempts: int, base_seconds: float) -> float:
@@ -52,7 +56,8 @@ class OutboxService:
     async def process_next(self) -> bool:
         """
         Procesa el siguiente evento vencido (§7.10), todo en una transacción: lo toma, construye el aviso, lo envía
-        y borra el evento. Devuelve False si no había ningún evento que procesar, y True si ha procesado uno.
+        y borra el evento. Si algo falla al construir o enviar el aviso, apunta el fallo en vez de borrarlo.
+        Devuelve False si no había ningún evento que procesar, y True si ha procesado uno (enviado o fallido).
         La transacción queda abierta mientras se envía el aviso (A3): así el evento sigue bloqueado y ningún otro
         worker lo envía a la vez
         """
@@ -65,12 +70,42 @@ class OutboxService:
                 return False
 
             # 2. Construye el aviso y se lo pasa al notificador
-            notification = await self._build_notification(event)
-            await self._notifier.send(notification)
+            try:
+                notification = await self._build_notification(event)
+                await self._notifier.send(notification)
 
-            # 3. Enviado: borra el evento, que se confirma al salir del bloque
-            await self._outbox.delete(event.id)
+            # 3a. Ha fallado: apunta el fallo y NO relanza el error. Si lo relanzara, la transacción se desharía y el
+            # fallo no quedaría apuntado: el evento seguiría vencido con los mismos intentos y se reintentaría sin
+            # fin, sin espera y sin llegar nunca a muerto
+            except Exception as exc:
+                await self._record_failure(event, exc)
+
+            # 3b. Enviado: borra el evento
+            else:
+                await self._outbox.delete(event.id)
+
+            # Al salir del bloque se confirma la transacción: el borrado o el fallo apuntado
             return True
+
+    async def _record_failure(self, event: OutboxEvent, exc: Exception) -> None:
+        """
+        Apunta un envío fallido: suma un intento y, si aún le quedan, programa el reintento tras la espera que toca;
+        si los ha agotado, deja el evento muerto. Lo registra en el log con el id del evento y el error
+        """
+
+        # El nuevo número de fallos. La fila está bloqueada desde take_due: nadie más la ha cambiado entretanto
+        attempts = event.attempts + 1
+
+        # Muerto (sin espera) o vivo con la espera que corresponde a este fallo
+        dead = is_dead(attempts, self._settings.outbox_max_attempts)
+        retry_in = None if dead else retry_delay_seconds(attempts, self._settings.outbox_backoff_base_seconds)
+
+        # Solo el id del evento, los intentos y el tipo y texto del error: nunca el aviso, que lleva el código
+        logger.warning(
+            "Aviso no enviado: el evento queda muerto" if dead else "Aviso no enviado: se reintentará",
+            extra={"event_id": str(event.id), "attempts": attempts, "error": f"{type(exc).__name__}: {exc}"},
+        )
+        await self._outbox.record_failure(event.id, attempts, retry_in)
 
     async def _build_notification(self, event: OutboxEvent) -> Notification:
         """
