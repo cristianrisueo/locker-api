@@ -1,7 +1,6 @@
 # Idempotencia de la reserva por la API: reintentos con la misma Idempotency-Key, cuerpo distinto y claves que no se guardan.
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +36,6 @@ async def claves(session: AsyncSession) -> list[tuple[str, str, str, Any]]:
     return [(fila.carrier, fila.key, fila.request_hash, fila.response_body) for fila in filas]
 
 
-@pytest.mark.xfail(strict=True, reason="la reserva todavía no registra la Idempotency-Key")
 async def test_reintento_con_la_misma_clave_devuelve_la_misma_respuesta(
     session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -58,7 +56,6 @@ async def test_reintento_con_la_misma_clave_devuelve_la_misma_respuesta(
     assert await claves(session) == [("SEUR", "reserva-ES123", fingerprint(cuerpo_de(edificio)), primera.json())]
 
 
-@pytest.mark.xfail(strict=True, reason="la reserva todavía no compara la huella de la clave")
 async def test_la_misma_clave_con_otro_cuerpo_devuelve_422(
     session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -78,7 +75,6 @@ async def test_la_misma_clave_con_otro_cuerpo_devuelve_422(
     assert await claves(session) == [("SEUR", "reserva-1", fingerprint(cuerpo_de(edificio)), primera.json())]
 
 
-@pytest.mark.xfail(strict=True, reason="la reserva todavía no registra la Idempotency-Key")
 async def test_clave_nueva_para_un_paquete_ya_reservado_devuelve_409_y_no_guarda_la_clave(
     session: AsyncSession, crear_edificio: CrearEdificio, reservar: Reservar, cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -97,7 +93,6 @@ async def test_clave_nueva_para_un_paquete_ya_reservado_devuelve_409_y_no_guarda
     assert await claves(session) == [("SEUR", "reserva-1", fingerprint(cuerpo_de(edificio)), primera.json())]
 
 
-@pytest.mark.xfail(strict=True, reason="la reserva todavía no exige la cabecera Idempotency-Key")
 async def test_sin_idempotency_key_devuelve_422(
     client: AsyncClient, session: AsyncSession, crear_edificio: CrearEdificio, cabeceras_transportista: dict[str, str]
 ) -> None:
