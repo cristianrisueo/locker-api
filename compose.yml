@@ -1,0 +1,63 @@
+# Configuración común de los servicios de la aplicación: misma imagen, mismas variables.
+# El perfil "app" hace que `make up` siga levantando solo Postgres para el día a día
+x-app: &app
+  build: .
+  image: locker:local
+  profiles: ["app"]
+  env_file: .env
+  # El .env apunta a localhost (para `make run`); dentro de la red de Compose la base de datos es "db"
+  environment:
+    DATABASE_URL: postgresql+asyncpg://locker:locker@db:5432/locker
+  depends_on:
+    db:
+      condition: service_healthy
+
+# La API en contenedor: la imagen slim no trae curl, así que el healthcheck usa Python.
+# /health comprueba también la base de datos: la réplica solo está sana si llega a ella
+x-api: &api
+  <<: *app
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 5s
+
+services:
+  db:
+    image: postgres:18
+    container_name: locker-db
+    environment:
+      POSTGRES_USER: locker
+      POSTGRES_PASSWORD: locker
+      POSTGRES_DB: locker
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U locker -d locker"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Aplica las migraciones y termina. Se lanza explícitamente, como el paso del pipeline de despliegue:
+  # docker compose --profile app run --rm migrate
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+
+  # Dos réplicas de la API con la misma imagen y la misma base de datos, sin estado en memoria.
+  # Puertos 8001 y 8002 para no chocar con `make run` (8000)
+  api-1:
+    <<: *api
+    ports:
+      - "8001:8000"
+
+  api-2:
+    <<: *api
+    ports:
+      - "8002:8000"
+
+volumes:
+  pgdata:
