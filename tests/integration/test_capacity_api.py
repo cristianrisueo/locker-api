@@ -1,7 +1,6 @@
 # Capacidad de un edificio por talla: total y libres, en orden S, M, L.
 import uuid
 
-import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +18,6 @@ async def crear_edificio(client: AsyncClient, cabeceras: dict[str, str], taquill
     return id_edificio
 
 
-@pytest.mark.xfail(strict=True, reason="la capacidad todavía no está implementada")
 async def test_capacidad_desglosa_total_y_libres_por_talla_en_orden_s_m_l(
     client: AsyncClient, session: AsyncSession, cabeceras_operador: dict[str, str]
 ) -> None:
@@ -49,7 +47,6 @@ async def test_capacidad_desglosa_total_y_libres_por_talla_en_orden_s_m_l(
     }
 
 
-@pytest.mark.xfail(strict=True, reason="la capacidad todavía no está implementada")
 async def test_transportista_consulta_la_capacidad_de_un_edificio_sin_taquillas(
     client: AsyncClient, cabeceras_operador: dict[str, str], cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -62,7 +59,6 @@ async def test_transportista_consulta_la_capacidad_de_un_edificio_sin_taquillas(
     assert respuesta.json() == {"building_id": edificio, "sizes": []}
 
 
-@pytest.mark.xfail(strict=True, reason="la capacidad todavía no está implementada")
 async def test_capacidad_de_edificio_inexistente_devuelve_404(
     client: AsyncClient, cabeceras_transportista: dict[str, str]
 ) -> None:

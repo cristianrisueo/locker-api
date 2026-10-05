@@ -54,4 +54,20 @@ class SqlLockerRepository:
 
     async def capacity(self, building_id: uuid.UUID) -> list[SizeCapacity]:
         """Una sola consulta agrupada por talla que cuenta a la vez el total y las libres."""
-        raise NotImplementedError
+
+        # SELECT size, count(*) AS total, count(*) FILTER (WHERE status = 'FREE') AS free
+        # FROM lockers WHERE building_id = :building_id GROUP BY size
+        # FILTER hace que el segundo count solo cuente las filas libres del grupo: un solo recorrido de la tabla
+        stmt = (
+            select(
+                LockerModel.size,
+                func.count().label("total"),
+                func.count().filter(LockerModel.status == "FREE").label("free"),
+            )
+            .where(LockerModel.building_id == building_id)
+            .group_by(LockerModel.size)
+        )
+        rows = await self._session.execute(stmt)
+
+        # Convierte cada fila (size, total, free) a un schema de Pydantic
+        return [SizeCapacity.model_validate(row, from_attributes=True) for row in rows]

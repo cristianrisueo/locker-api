@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from locker.buildings.exceptions import BuildingNotFoundError
 from locker.buildings.repository import BuildingRepository
 from locker.lockers.repository import LockerRepository
-from locker.lockers.schemas import Capacity, LockersCreated, LockersIn, Size
+from locker.lockers.schemas import SIZES, Capacity, LockersCreated, LockersIn, Size
 
 
 def make_label(size: Size, number: int) -> str:
@@ -48,5 +48,15 @@ class LockerService:
         return LockersCreated(lockers=lockers)
 
     async def capacity(self, building_id: uuid.UUID) -> Capacity:
-        """Capacidad del edificio por talla, en orden S, M, L. Si el edificio no existe, 404."""
-        raise NotImplementedError
+        """
+        Capacidad del edificio por talla, en orden S, M, L. Si el edificio no existe, 404.
+        Es una lectura simple: no abre transacción con begin()
+        """
+
+        # Sin esta comprobación, un edificio inexistente parecería un edificio sin taquillas (sizes vacío)
+        if not await self._buildings.exists(building_id):
+            raise BuildingNotFoundError(building_id)
+
+        # La consulta agrupada no garantiza ningún orden: se ordena aquí por la posición de cada talla en SIZES
+        sizes = await self._lockers.capacity(building_id)
+        return Capacity(building_id=building_id, sizes=sorted(sizes, key=lambda entry: SIZES.index(entry.size)))

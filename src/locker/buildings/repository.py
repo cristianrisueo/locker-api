@@ -55,4 +55,5 @@ class SqlBuildingRepository:
 
     async def exists(self, building_id: uuid.UUID) -> bool:
         """Dice si el edificio existe. Es una lectura normal: no bloquea la fila."""
-        raise NotImplementedError
+        stmt = select(BuildingModel.id).where(BuildingModel.id == building_id)
+        return await self._session.scalar(stmt) is not None
