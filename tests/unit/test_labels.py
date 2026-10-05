@@ -5,7 +5,6 @@ from locker.lockers.schemas import Size
 from locker.lockers.service import make_label
 
 
-@pytest.mark.xfail(strict=True, reason="make_label todavía no está implementada")
 @pytest.mark.parametrize(
     ("talla", "numero", "etiqueta"),
     [("S", 1, "S-01"), ("M", 3, "M-03"), ("L", 12, "L-12"), ("M", 100, "M-100")],
