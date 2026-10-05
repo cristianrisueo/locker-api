@@ -33,7 +33,7 @@ class SqlBuildingRepository:
         """Inserta un edificio y lo devuelve con el id generado."""
 
         # Crea un modelo de SQLAlchemy a partir del schema de Pydantic que viene de la API
-        model = BuildingModel(name=data.name)
+        model = BuildingModel(name=data.name, country=data.country)
 
         # Lo apunta en la sesión y envía el INSERT con flush, sin confirmar: el commit lo hace el servicio
         # al cerrar su transacción. El id (UUID v7) lo genera la aplicación al enviar la fila

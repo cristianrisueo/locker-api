@@ -4,7 +4,6 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-import pytest
 from sqlalchemy import NullPool, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -41,7 +40,6 @@ async def edificios(engine: AsyncEngine) -> list[dict[str, Any]]:
         return [dict(fila._mapping) for fila in filas]
 
 
-@pytest.mark.xfail(strict=True, reason="la migración de country todavía es un esqueleto vacío")
 async def test_la_migracion_de_country_conserva_los_edificios_y_les_pone_es(
     bd_migraciones: str, alembic: AlembicRunner
 ) -> None:
