@@ -108,6 +108,7 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A16 | `recipient` es texto libre, sin validar su formato                                 | No hay «mis entregas» por residente                                                            |
 | A17 | La instalación inicial no admite `country` en `buildings`                          | Se añade en F3 con una migración con datos, a propósito (§5.8)                                 |
 | A18 | La API no se despliega y las claves son de desarrollo                              | Los valores de `.env.example` no son secretos reales                                           |
+| A19 | Las rutas inexistentes (404), los métodos no permitidos (405) y los errores internos (500) conservan el formato por defecto de FastAPI; un 500 no lleva `X-Request-ID` | No están en el catálogo (§8.3); el contrato de `/v1` solo cubre las operaciones definidas |
 
 ---
 
@@ -269,8 +270,10 @@ nombra el objeto de base de datos que la sostiene cuando lo hay. Las revisiones 
   reservas que terminan bien.
 - **I9.** Las claves de API y el secreto del código no se escriben en logs, respuestas ni mensajes de error. Se comparan
   en tiempo constante (`hmac.compare_digest`).
-- **I10.** Todo error de la API tiene la forma `{"code": "...", "detail": "..."}` y nunca expone SQL, trazas ni
-  mensajes del driver. Solo se devuelven los códigos del catálogo de §8.3.
+- **I10.** Todo error de un endpoint de la API tiene la forma `{"code": "...", "detail": "..."}` y nunca expone SQL,
+  trazas ni mensajes del driver. Solo se devuelven los códigos del catálogo de §8.3. Excepción conocida: las rutas
+  inexistentes (404), los métodos no permitidos (405) y los errores internos no controlados (500) conservan el
+  formato por defecto de FastAPI (A19).
 - **I11.** El esquema solo cambia con migraciones de Alembic. Una migración ya fusionada en `main` no se edita.
 - **I12.** El alta de taquillas calcula la etiqueta con la fila del edificio bloqueada (`FOR UPDATE`) y en la misma
   transacción que inserta las taquillas.
@@ -710,7 +713,7 @@ locker-api/
 | `main.py`                     | App global, lifespan (engine, fábrica de sesiones, logs), routers bajo `/v1`, `/health`, manejadores y middleware |
 | `core/config.py`              | `DatabaseSettings` (URL y eco SQL, lo único que necesitan Alembic) y `Settings` (resto), `get_settings` |
 | `core/database.py`            | Engine, fábrica de sesiones, `Base` y `get_session`                               |
-| `core/exceptions.py`          | `DomainError` y las familias: `NotFoundError`, `ConflictError`, `ForbiddenError`, `UnauthenticatedError`, `UnprocessableError`, `ServiceUnavailableError`, cada una con su `code` |
+| `core/exceptions.py`          | `DomainError` y las familias: `NotFoundError`, `ConflictError`, `ForbiddenError`, `UnauthenticatedError`, `UnprocessableError`, `ServiceUnavailableError`. `NotFoundError`, `ForbiddenError`, `UnauthenticatedError` y `ServiceUnavailableError` llevan su `code`; en `ConflictError` y `UnprocessableError` lo pone cada error de dominio |
 | `core/exception_handlers.py`  | Único sitio que traduce errores a HTTP y da forma `{code, detail}`                |
 | `core/security.py`            | `Principal`, `get_principal`, `require_role`                                      |
 | `core/middleware.py`          | Identificador de petición                                                         |
@@ -867,3 +870,4 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | Fecha      | Cambio                | Motivo                                                  | Invalida |
 | ---------- | --------------------- | ------------------------------------------------------- | -------- |
 | 2026-10-04 | Primera versión       | Cierre de las 13 decisiones de diseño                   | —        |
+| 2026-10-05 | I10, A19 y §11        | Revisión de F0: contradicción detectada por Claude Code y familias sin código propio | — |
