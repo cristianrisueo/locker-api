@@ -1,4 +1,5 @@
 # Repositorio de entregas: define la interfaz y su implementación sobre PostgreSQL.
+import uuid
 from typing import Protocol
 
 from sqlalchemy import insert
@@ -20,6 +21,12 @@ class DeliveryRepository(Protocol):
     # Crea una entrega PENDING en la taquilla asignada y la devuelve completa.
     # Si el paquete ya tiene una entrega activa, lanza DuplicatePackageError
     async def add(self, locker: Locker, carrier: str, data: ReservationIn) -> Delivery: ...
+
+    # Lee la entrega con los datos de su taquilla. Con carrier, solo si es de ese transportista. None si no la encuentra
+    async def get(self, delivery_id: uuid.UUID, carrier: str | None = None) -> Delivery | None: ...
+
+    # Pasa la entrega del transportista de PENDING a DEPOSITED y la devuelve. None si no ha cambiado ninguna fila
+    async def deposit(self, delivery_id: uuid.UUID, carrier: str) -> Delivery | None: ...
 
 
 class SqlDeliveryRepository:
@@ -75,3 +82,11 @@ class SqlDeliveryRepository:
                 "picked_up_at": model.picked_up_at,
             }
         )
+
+    async def get(self, delivery_id: uuid.UUID, carrier: str | None = None) -> Delivery | None:
+        """Lee la entrega, unida a su taquilla."""
+        raise NotImplementedError
+
+    async def deposit(self, delivery_id: uuid.UUID, carrier: str) -> Delivery | None:
+        """UPDATE condicional de PENDING a DEPOSITED."""
+        raise NotImplementedError
