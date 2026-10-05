@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from locker.buildings.repository import SqlBuildingRepository
 from locker.lockers.repository import SqlLockerRepository
-from tests.integration.conftest import AbrirConexiones, CrearEdificio
+from tests.integration.conftest import AbrirConexiones, CrearEdificio, bloqueos_en_espera
 
 
 async def test_dos_altas_simultaneas_de_la_misma_talla_salen_consecutivas(
@@ -39,17 +39,6 @@ async def test_dos_altas_simultaneas_de_la_misma_talla_salen_consecutivas(
     assert sorted(etiquetas) == ["M-03", "M-04"]
     filas = await session.scalars(text("SELECT label FROM lockers WHERE building_id = :id ORDER BY label"), {"id": edificio})
     assert filas.all() == ["M-01", "M-02", "M-03", "M-04"]
-
-
-async def bloqueos_en_espera(observador: AsyncSession) -> int:
-    """
-    Cuántas sesiones de esta base de datos están esperando a un bloqueo, según pg_stat_activity.
-    PostgreSQL congela esa vista durante cada transacción: se cierra tras leerla para que la siguiente lectura sea nueva
-    """
-    consulta = text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'")
-    esperando = int((await observador.execute(consulta)).scalar_one())
-    await observador.rollback()
-    return esperando
 
 
 async def test_un_alta_espera_al_bloqueo_del_edificio_y_cuenta_despues(

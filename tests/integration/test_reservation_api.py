@@ -180,7 +180,8 @@ async def test_cuerpo_invalido_devuelve_422(
     edificio = await crear_edificio({"M": 1})
     cuerpo = {"building_id": edificio, "size": "M", "tracking_ref": "ES123", "recipient": "vecino@example.com", **cambio}
 
-    respuesta = await client.post("/v1/deliveries", json=cuerpo, headers=cabeceras_transportista)
+    cabeceras = {**cabeceras_transportista, "Idempotency-Key": str(uuid.uuid4())}
+    respuesta = await client.post("/v1/deliveries", json=cuerpo, headers=cabeceras)
 
     assert respuesta.status_code == 422
     assert respuesta.json() == {"code": "VALIDATION_ERROR", "detail": detail}
