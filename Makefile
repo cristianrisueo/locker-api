@@ -1,8 +1,8 @@
 # Comandos del proyecto locker. Escribe "make" para ver la lista.
-.PHONY: help up stop down destroy psql migrate migration rollback run check test test-unit test-integration coverage
+.PHONY: help up stop down destroy psql migrate migration rollback run check test test-unit test-integration coverage e2e smoke
 
 help:  ## Muestra esta ayuda
-	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-18s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
 # --- Base de datos (Docker) ---
 
@@ -54,3 +54,19 @@ test-integration:  ## Solo integración (Postgres efímero con testcontainers)
 
 coverage:  ## Unitarios + integración con informe de cobertura (terminal y htmlcov/index.html)
 	uv run pytest --cov --cov-report=term --cov-report=html
+
+# --- Sistema desplegado ---
+
+# Servicios de la aplicación que levanta y para `make e2e` (la base de datos se queda en marcha)
+APP_SERVICES = api-1 api-2
+
+e2e:  ## Levanta el sistema en contenedores, migra, pasa E2E + smoke y para la aplicación
+	docker compose up -d --wait db
+	docker compose --profile app run --rm --build migrate
+	docker compose --profile app up -d --build --wait $(APP_SERVICES)
+	BASE_URLS=http://127.0.0.1:8001,http://127.0.0.1:8002 uv run pytest tests/e2e; status=$$?; \
+		docker compose --profile app stop $(APP_SERVICES); exit $$status
+
+smoke:  ## Smoke contra un sistema ya levantado. Uso: make smoke BASE_URLS=http://...,http://...
+	@test -n "$(BASE_URLS)" || (echo 'Falta BASE_URLS: make smoke BASE_URLS=http://...,http://...' && exit 1)
+	BASE_URLS=$(BASE_URLS) uv run pytest tests/e2e/test_smoke.py
