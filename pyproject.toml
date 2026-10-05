@@ -1,0 +1,62 @@
+[project]
+name = "locker"
+version = "0.1.0"
+description = "Locker API"
+
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.20.0",
+    "asyncpg>=0.31.0",
+    "fastapi[standard]>=0.142.2",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy[asyncio]>=2.1.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.22,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.10",
+    "testcontainers>=4.15.0",
+]
+
+[tool.ruff]
+line-length = 125
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+plugins = ["pydantic.mypy"]
+# Los tests no son paquetes (sin __init__.py): el nombre de cada módulo sale de su ruta, así
+# tests/integration/conftest.py y tests/e2e/conftest.py no chocan. src/ se mapea al paquete locker
+explicit_package_bases = true
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+# `uv run pytest` a secas nunca necesita el sistema desplegado (E2E y smoke van aparte)
+testpaths = ["tests/unit", "tests/integration"]
+addopts = ["--strict-config", "--strict-markers", "--import-mode=importlib", "-ra"]
+# Engine y conexiones asyncpg quedan ligados al loop donde se crean: un único loop para toda la sesión
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+
+[tool.coverage.run]
+# Mide solo el código de la aplicación (no los tests ni las librerías), incluyendo ramas de if/try
+source = ["locker"]
+branch = true
+
+[tool.coverage.report]
+# La cobertura es una señal, no un objetivo: sin fail_under. Muestra las líneas sin cubrir
+show_missing = true
+skip_covered = true

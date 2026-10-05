@@ -1,0 +1,29 @@
+# Entorno virtual (se regenera con uv sync)
+.venv/
+
+# Variables de entorno: pueden contener secretos
+.env
+
+# Cachés de Python y de las herramientas
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.pytest_cache/
+
+# Cobertura de tests
+.coverage
+htmlcov/
+
+# Artefactos de construcción del paquete
+build/
+dist/
+*.egg-info/
+
+# Editor: se ignora todo salvo la configuración compartida del proyecto
+.vscode/*
+!.vscode/settings.json
+
+# Sistema operativo
+.DS_Store
