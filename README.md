@@ -393,7 +393,39 @@ gcloud run worker-pools update locker-worker --instances=1 --project=locker-api-
 deploy/teardown.sh --unlink-billing
 ```
 
-Borra Cloud SQL (con sus datos), el servicio, el worker pool, el job y los secretos, y con `--unlink-billing` desvincula la facturación: sin cuenta vinculada, el proyecto ya no puede facturar nada. Antes de borrar comprueba que todo lo que va a borrar es de este despliegue; si aparece algo más, para sin tocar nada. Quedan, sin coste, el repositorio de imágenes, las cuentas de servicio, la federación, el presupuesto y las APIs activadas, que `setup.sh` reutiliza. No borra el proyecto. Ojo: Cloud SQL no deja reutilizar el nombre `locker-db` hasta una semana después de borrar la instancia, así que un `setup.sh` justo después de un `teardown.sh` falla al crearla.
+Borra Cloud SQL (con sus datos), el mapeo del dominio propio, el servicio, el worker pool, el job y los secretos, y con `--unlink-billing` desvincula la facturación: sin cuenta vinculada, el proyecto ya no puede facturar nada. Antes de borrar comprueba que todo lo que va a borrar es de este despliegue; si aparece algo más, para sin tocar nada. Quedan, sin coste, el repositorio de imágenes, las cuentas de servicio, la federación, el presupuesto y las APIs activadas, que `setup.sh` reutiliza. No borra el proyecto. Ojo: Cloud SQL no deja reutilizar el nombre `locker-db` hasta una semana después de borrar la instancia, así que un `setup.sh` justo después de un `teardown.sh` falla al crearla.
+
+### Dominio propio
+
+La API responde también en **<https://api.lockerapi.dev>**, además de en su URL de `run.app`. El dominio `lockerapi.dev` se compró en **Vercel** y su DNS vive allí, no en Google Cloud; la raíz queda libre para un futuro frontend. Su renovación es cosa del desarrollador: si caduca, `api.lockerapi.dev` deja de responder, pero la URL de `run.app` sigue funcionando.
+
+Lo une al servicio un **mapeo de dominio** de Cloud Run (`gcloud beta run domain-mappings`): Google comprueba el dominio, emite el certificado HTTPS y lo renueva solo. Es una función **en preview**, sin SLA, que Google puede cambiar (A30); a cambio no hace falta un balanceador de carga, que tiene coste fijo.
+
+Hacen falta dos registros DNS en `lockerapi.dev`. Se añaden una vez, en Vercel (*Domains* → `lockerapi.dev` → *DNS Records* → *Add*), o con la CLI de Vercel:
+
+| Para qué                                                         | Name  | Type    | Value                                              |
+| ---------------------------------------------------------------- | ----- | ------- | -------------------------------------------------- |
+| Demostrar que el dominio es tuyo (Search Console, una sola vez)   | `@` (la raíz) | `TXT`   | `google-site-verification=...` (el que te da Search Console) |
+| Llevar `api` a Cloud Run                                          | `api` | `CNAME` | `ghs.googlehosted.com.`                            |
+
+```bash
+gcloud domains verify lockerapi.dev   # abre Search Console: propiedad de tipo «Dominio», copia el TXT, añádelo y pulsa «Verificar»
+vercel dns add lockerapi.dev '@' TXT 'google-site-verification=...'
+vercel dns add lockerapi.dev api CNAME ghs.googlehosted.com
+deploy/domain.sh                      # crea el mapeo, imprime los registros que pide Google y espera al certificado
+```
+
+`domain.sh` es idempotente y no cambia el servicio: comprueba que el dominio está verificado, crea el mapeo si no existe, imprime los registros DNS que pide Google y espera (como mucho 30 minutos) a que el certificado esté listo y `/health` responda `200`. Si se agota la espera, avisa y sale: el certificado puede tardar más, y basta con volver a ejecutarlo. Necesita el componente `beta` de `gcloud` (`gcloud components install beta`). Los registros que Vercel pone por defecto (`ALIAS`, `CAA` y `HTTPS`) no se tocan; el `CAA` ya permite a Google emitir el certificado (`pki.goog`).
+
+Para comprobarlo:
+
+```bash
+dig +short CNAME api.lockerapi.dev     # ghs.googlehosted.com.
+gcloud beta run domain-mappings describe --domain=api.lockerapi.dev --project=locker-api-cristian --region=europe-west1
+curl -i https://api.lockerapi.dev/health
+```
+
+`teardown.sh` borra el mapeo (antes que el servicio). Los registros DNS y el dominio se quedan como están: son inofensivos, y sin mapeo `api.lockerapi.dev` simplemente no responde.
 
 ### Limitaciones del despliegue
 
@@ -401,6 +433,7 @@ Borra Cloud SQL (con sus datos), el servicio, el worker pool, el job y los secre
 - La API es pública y solo la protegen las claves de API. Como no hay límite de intentos al recoger (A1), el código de recogida es adivinable por fuerza bruta si se conoce el `id` de la entrega, un UUID (A27).
 - La infraestructura se prepara con scripts de bash, no de forma declarativa: no detectan cambios hechos a mano en la consola (A28).
 - Las claves no se rotan: hacerlo exige volver a ejecutar el script (tras borrar el secreto) y redesplegar (A29).
+- El dominio propio usa una función en preview, sin garantías, y depende de Vercel (DNS) y de que el dominio se renueve (A30).
 
 ### Registro de despliegues
 
@@ -409,6 +442,7 @@ Una fila por despliegue real: qué se lanzó, cómo terminó y qué falló por e
 | Fecha      | Etiqueta      | Resultado | URL pública de la API                          | Qué falló y cómo se arregló |
 | ---------- | ------------- | --------- | ---------------------------------------------- | --------------------------- |
 | 2026-10-06 | `v0.1.0-gcp1` | Verde a la primera (`verify` 45 s, `deploy` 2 min 25 s) | <https://locker-api-sjqtezncha-ew.a.run.app> | Nada en el pipeline. En `setup.sh`, el primer permiso de `locker-runtime` falló porque IAM aún no veía la cuenta recién creada; el reintento de 10 s lo resolvió, como estaba previsto. En local, el `gcloud` de Homebrew no cargaba `worker-pools deploy/update/delete` por falta de `grpc` (solución arriba, en «Preparación») |
+| 2026-10-06 | F7b (dominio propio, sin etiqueta) | Verde: `https://api.lockerapi.dev/health` da `200` con `X-Request-ID` y certificado de Google Trust Services | <https://api.lockerapi.dev> | El certificado tardó unos 55 minutos: la primera ejecución de `domain.sh` agotó su espera de 30 minutos (aviso, sin error) y la segunda lo encontró listo. En local hubo que instalar el componente `beta` de `gcloud` e iniciar sesión en la CLI de Vercel |
 
 Comprobaciones de F7 en ese despliegue (`docs/plan_fases.md` §11):
 
@@ -419,3 +453,12 @@ Comprobaciones de F7 en ese despliegue (`docs/plan_fases.md` §11):
 - **F7-05**: la etiqueta `v0.1.0-gcp1` lanzó el CD, que terminó en verde, smoke incluido.
 - **F7-06**: `deploy` tiene `needs: verify`, y en la ejecución empezó (14:37:50 UTC) después de que `verify` terminara (14:37:47 UTC).
 - **F7-07**: pendiente. Por decisión del desarrollador, el despliegue sigue encendido tras las comprobaciones; se cumplirá al ejecutar `deploy/teardown.sh --unlink-billing`.
+
+Comprobaciones de F7b, el dominio propio (`docs/plan_fases.md`, «F7b — Dominio propio»):
+
+- **F7b-01**: `domain.sh` pasa `bash -n` y `shellcheck`; la segunda ejecución dijo «ya existe» y no creó nada.
+- **F7b-02**: `lockerapi.dev` aparece en `gcloud domains list-user-verified` (verificado en Search Console con el `TXT`).
+- **F7b-03**: el `TXT` de la raíz y el `CNAME` de `api` (a `ghs.googlehosted.com.`) se ven con `dig` desde 8.8.8.8 y 1.1.1.1. Los siete registros que Vercel tenía por defecto (`ALIAS`, `CAA` y `HTTPS`) siguen igual.
+- **F7b-04**: el mapeo está `Ready` con `CertificateProvisioned=True`, y `https://api.lockerapi.dev/health` da `200 {"status":"ok"}` con `X-Request-ID`, con un certificado para `api.lockerapi.dev` emitido por Google Trust Services.
+- **F7b-05**: `teardown.sh` borra el mapeo, si existe, antes que el servicio (revisado en el código; no se ha ejecutado).
+- **F7b-06**: el servicio sirve la misma revisión (`locker-api-00001-g7z`) y el worker, Cloud SQL y los secretos siguen igual que antes de F7b.

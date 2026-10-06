@@ -78,7 +78,7 @@ reservas) y F7 (despliegue en Google Cloud) se añaden después.
 | Envío real de correos o SMS, webhooks al transportista        | No demuestra nada que no demuestre el log; el notificador es sustituible              |
 | Evento de recogida o de reserva                               | Nadie los consume                                                                     |
 | Proxy propio                                                  | Fuera de plazo; el PDF explica cómo se haría. En Google Cloud, Cloud Run ya da el HTTPS |
-| Infraestructura como código (Terraform), entornos múltiples, dominio propio | No demuestran nada nuevo para la candidatura; la preparación se documenta con scripts |
+| Infraestructura como código (Terraform), entornos múltiples | No demuestran nada nuevo para la candidatura; la preparación se documenta con scripts |
 | JWT, usuarios, contraseñas, cuenta de residente               | La clave de API cubre la integración máquina a máquina                                |
 | Límite de intentos al recoger                                 | Bloquear tiene costes (bloqueo malicioso) y exige diseño de desbloqueo (supuesto A1)  |
 | Listados, paginación, borrar o modificar edificios y taquillas, cancelar reservas | Ninguno demuestra nada nuevo                                       |
@@ -122,6 +122,7 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A27 | La API desplegada es pública, protegida solo por las claves de API                 | Con A1, el código de recogida es adivinable por fuerza bruta si se conoce el `id` de la entrega (un UUID) |
 | A28 | La infraestructura se prepara con scripts de bash, no de forma declarativa         | Los scripts no detectan los cambios hechos a mano en la consola de Google Cloud                |
 | A29 | Las claves generadas en el despliegue no se rotan                                  | Rotarlas exige volver a ejecutar el script y redesplegar                                       |
+| A30 | El dominio propio usa el *domain mapping* de Cloud Run, una función en preview y sin garantías, y el dominio y su DNS dependen de Vercel (F7b) | Google puede cambiarla o retirarla, y sin SLA. Si el DNS de Vercel falla o el dominio no se renueva, `api.lockerapi.dev` deja de responder; la URL `run.app` del servicio sigue funcionando |
 
 ---
 
@@ -781,6 +782,7 @@ locker-api/
 ├── .vscode/settings.json
 ├── deploy/
 │   ├── setup.sh
+│   ├── domain.sh
 │   └── teardown.sh
 ├── docs/
 │   ├── especificaciones.md
@@ -847,7 +849,8 @@ locker-api/
 | `outbox/`                     | Modelo y repositorio de eventos; `events.py`, `notifier.py`, `service.py`, `worker.py`. Desde F6, `worker.py` ejecuta también la caducidad (conserva el nombre histórico) |
 | `migrations/`                 | Alembic; `env.py` usa `DatabaseSettings`                                          |
 | `deploy/setup.sh`             | Prepara Google Cloud de forma idempotente: APIs, Artifact Registry, Cloud SQL, secretos, cuentas de servicio, federación de identidad, permisos y presupuesto (F7, §13.5) |
-| `deploy/teardown.sh`          | Borra lo que se factura (Cloud SQL, servicio, worker pool, job) y los secretos; con `--unlink-billing`, desvincula la facturación (F7) |
+| `deploy/domain.sh`            | Mapea el dominio propio `api.lockerapi.dev` al servicio de la API, imprime los registros DNS y espera al certificado (F7b, §13.5) |
+| `deploy/teardown.sh`          | Borra lo que se factura (Cloud SQL, servicio, worker pool, job), el mapeo del dominio y los secretos; con `--unlink-billing`, desvincula la facturación (F7) |
 | `.github/workflows/cd.yml`    | CD: con una etiqueta `v*` o a mano, verifica, construye la imagen, migra, despliega la API y el worker y pasa el smoke (F7) |
 
 ---
@@ -963,8 +966,8 @@ Demuestra un CD de GitHub Actions enlazado a Google Cloud, a bajo coste y de for
      facturación vinculada; activa solo las APIs necesarias; crea Artifact Registry, la instancia y la base de datos, los
      secretos, las cuentas de servicio, la federación y los permisos, y un presupuesto de 5 EUR con avisos al 50, 90 y
      100 % (si falla, avisa y sigue). Al final imprime las variables de GitHub. `--yes` evita la confirmación.
-   - `teardown.sh [--yes] [--unlink-billing]`: borra Cloud SQL, el servicio, el worker pool, el job y los secretos; con
-     `--unlink-billing`, desvincula la facturación. No borra el proyecto.
+   - `teardown.sh [--yes] [--unlink-billing]`: borra Cloud SQL, el servicio (y antes su mapeo de dominio, F7b), el
+     worker pool, el job y los secretos; con `--unlink-billing`, desvincula la facturación. No borra el proyecto.
 8. **Pipeline** (`.github/workflows/cd.yml`, `name: CD`). Se lanza a mano (`workflow_dispatch`) o con el push de una
    etiqueta `v*`; nunca en cada push a `main`. Permisos `id-token: write` y `contents: read`. Dos trabajos:
    - `verify`: los mismos pasos que el CI (§13.4).
@@ -978,6 +981,19 @@ Demuestra un CD de GitHub Actions enlazado a Google Cloud, a bajo coste y de for
 10. **Coste**: tope de 5 € con un presupuesto que avisa. Solo facturan sin parar Cloud SQL y el worker pool; la API
     escala a 0. El README documenta el coste por pieza, cómo apagar sin borrar (el worker pool a 0 instancias y Cloud SQL
     con la política de activación `never`/`always`) y cómo borrarlo todo.
+11. **Dominio propio (F7b)**. La API responde también en `https://api.lockerapi.dev`. El dominio `lockerapi.dev` se
+    compró en Vercel y su DNS vive allí, no en Google Cloud; la raíz queda libre para un futuro frontend en Vercel.
+    - Se usa el *domain mapping* de Cloud Run (`gcloud beta run domain-mappings`, en preview, A30) en `europe-west1`:
+      Google emite y renueva el certificado HTTPS. Sin balanceador de carga ni Firebase Hosting.
+    - El dominio base se verifica una vez para la cuenta (Search Console, un registro `TXT` en la raíz). El mapeo pide
+      un `CNAME` de `api` a `ghs.googlehosted.com.`. Son los dos únicos registros que se añaden en Vercel; los que ya
+      tenía el dominio no se tocan.
+    - `deploy/domain.sh` (idempotente, `set -euo pipefail`): comprueba el proyecto y la configuración y que el dominio
+      está verificado, crea el mapeo si no existe, imprime los registros DNS que pide Google y espera (como mucho 30
+      minutos, cada 30 s) a que el certificado esté listo y `https://api.lockerapi.dev/health` responda `200`. Si se
+      agota la espera no es un error: imprime el estado y sale con un aviso. No cambia el servicio.
+    - `teardown.sh` borra el mapeo, si existe, antes que el servicio. Los registros DNS y el dominio se quedan como
+      están: son inofensivos, y el dominio es del desarrollador (también su renovación).
 
 **Recursos**
 
@@ -995,8 +1011,9 @@ Demuestra un CD de GitHub Actions enlazado a Google Cloud, a bajo coste y de for
 | `locker-api`                  | Servicio de Cloud Run                  | Puerto 8000, de 0 a 2 instancias, 1 vCPU y 512 MiB, público          |
 | `locker-worker`               | Worker pool de Cloud Run               | `python -m locker.outbox.worker`, 1 instancia, 1 vCPU y 512 MiB      |
 | `locker-api` (presupuesto)    | Presupuesto de facturación             | 5 EUR para el proyecto, avisos al 50, 90 y 100 %                     |
+| `api.lockerapi.dev`           | Mapeo de dominio de Cloud Run (F7b)    | Al servicio `locker-api`, en `europe-west1`; certificado gestionado por Google |
 
-Los tres últimos de cómputo (job, servicio y worker pool) los crea el pipeline, no `setup.sh`. Los usan `locker-runtime`
+El job, el servicio y el worker pool los crea el pipeline, no `setup.sh`; el mapeo de dominio lo crea `domain.sh`. Los usan `locker-runtime`
 y los tres secretos.
 
 **Flujo del pipeline**
@@ -1076,6 +1093,7 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | D15 | Notificador                    | `Protocol` con `LogNotifier` y un doble de test                                            | Interfaz «por si acaso» un broker (abstracción sin uso); envío real de correos (no aporta)                            |
 | D16 | Caducidad de reservas          | Columna `expires_at` y trabajo en el mismo worker con `UPDATE` condicional y `SKIP LOCKED` | Caducidad perezosa al reservar (la taquilla seguiría `BUSY` en la capacidad hasta que alguien reserve); proceso aparte (otra pieza sin necesidad); exponer `expires_at` (rompería el JSON de tests de fases cerradas) |
 | D17 | Despliegue en Google Cloud     | Combinación efímera con Cloud Run (servicio, worker pool y job de migraciones) y Cloud SQL, con CD de GitHub Actions por federación de identidad | VPS con Docker Compose y Caddy (no demuestra Google Cloud); máquina virtual gratuita `e2-micro` con todo dentro (gratis, pero menos representativa y justa de memoria); FastAPI Cloud (en beta y sin procesos en segundo plano); Railway (comodidad a cambio de menos control y coste variable); CD en cada push a `main` (gastaría presupuesto sin que lo decidas) |
+| D18 | Dominio propio                 | *Domain mapping* de Cloud Run para `api.lockerapi.dev`, con el dominio y el DNS en Vercel (F7b) | Balanceador de carga (coste fijo); Firebase Hosting (una pieza más); comprar el dominio en Cloud Domains (ata su vida al proyecto, que se apaga) |
 
 ---
 
@@ -1089,3 +1107,4 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | 2026-10-06 | §7.7, §7.10, A21, A22 y §14.4 | Cierre del núcleo (F0 a F5): la liberación de la taquilla es condicional (I4); la espera de los reintentos es 2, 4, 8 y 16 s; dos limitaciones del worker; los tests de concurrencia deben fallar sin su protección | — |
 | 2026-10-06 | F6 (caducidad)        | Se añade la fase F6 tras cerrar el núcleo; redactada por Claude Code por encargo del desarrollador | A6, §1, §2.2, §4, §5.8 y §7.8 |
 | 2026-10-06 | F7 (despliegue en Google Cloud) | Se añade y ejecuta la fase F7; redactada y ejecutada por Claude Code por encargo del desarrollador | A9, A18 y §2.2 |
+| 2026-10-06 | F7b (dominio propio)  | La API se publica también en `api.lockerapi.dev` con el *domain mapping* de Cloud Run; redactada y ejecutada por Claude Code por encargo del desarrollador | §2.2 |

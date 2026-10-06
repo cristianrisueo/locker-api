@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Borrado del despliegue de Locker API en Google Cloud (fase F7, docs/especificaciones.md §13.5).
-# Borra lo que se factura (Cloud SQL, el servicio, el worker pool y el job) y los secretos. Con --unlink-billing,
-# además desvincula la facturación del proyecto: así ya no se puede facturar nada. Nunca borra el proyecto.
+# Borra lo que se factura (Cloud SQL, el servicio, el worker pool y el job), el mapeo del dominio propio (F7b) y los
+# secretos. Con --unlink-billing, además desvincula la facturación del proyecto: así ya no se puede facturar nada.
+# Nunca borra el proyecto, ni el dominio ni sus registros DNS (viven en Vercel y son del desarrollador).
 #
 # Se puede ejecutar varias veces: lo que ya no existe se salta.
 # Uso: deploy/teardown.sh [--yes] [--unlink-billing]
@@ -21,6 +22,7 @@ SQL_INSTANCE="locker-db"
 API_SERVICE="locker-api"
 WORKER_POOL="locker-worker"
 MIGRATE_JOB="locker-migrate"
+API_DOMAIN="api.lockerapi.dev"
 SECRETS=(locker-api-keys locker-pickup-secret locker-db-url)
 
 # --- Ayudantes ---
@@ -79,6 +81,10 @@ printf '    configuración %s, proyecto %s (%s), región %s\n' "$GCLOUD_CONFIG" 
 gcloud run worker-pools delete --help >/dev/null 2>&1 ||
   die "este gcloud no puede cargar «run worker-pools delete» (le falta grpc). Mira el README, «Despliegue en Google Cloud»"
 
+# El mapeo del dominio propio está en la pista beta de gcloud: sin ese componente no se puede ver ni borrar
+gcloud beta run domain-mappings --help >/dev/null 2>&1 ||
+  die "falta el componente beta de gcloud, necesario para borrar el mapeo del dominio: gcloud components install beta"
+
 # Lo que hay en el proyecto. Si una API ya está desactivada (o sin facturación) la lista falla: entonces no hay
 # nada de ese tipo que borrar, y se sigue
 step "Comprobando que todo lo que se va a borrar es de F7"
@@ -87,15 +93,18 @@ pools=$(gcloud run worker-pools list --project="$PROJECT_ID" --region="$REGION" 
 jobs=$(gcloud run jobs list --project="$PROJECT_ID" --region="$REGION" --format='value(name)' 2>/dev/null || true)
 instances=$(gcloud sql instances list --project="$PROJECT_ID" --format='value(name)' 2>/dev/null || true)
 secrets=$(gcloud secrets list --project="$PROJECT_ID" --format='value(name)' 2>/dev/null || true)
+mappings=$(gcloud beta run domain-mappings list --project="$PROJECT_ID" --region="$REGION" \
+  --format='value(metadata.name)' 2>/dev/null || true)
 only_expected "El servicio de Cloud Run" "$services" "$API_SERVICE"
 only_expected "El worker pool" "$pools" "$WORKER_POOL"
 only_expected "El job de Cloud Run" "$jobs" "$MIGRATE_JOB"
 only_expected "La instancia de Cloud SQL" "$instances" "$SQL_INSTANCE"
 only_expected "El secreto" "$secrets" "${SECRETS[@]}"
+only_expected "El mapeo de dominio" "$mappings" "$API_DOMAIN"
 printf '    solo hay recursos de F7\n'
 
 if [[ $ASSUME_YES != true ]]; then
-  read -r -p "Se van a BORRAR Cloud SQL (con sus datos), la API, el worker, el job y los secretos. ¿Continuar? [s/N] " answer
+  read -r -p "Se van a BORRAR Cloud SQL (con sus datos), la API, su dominio, el worker, el job y los secretos. ¿Continuar? [s/N] " answer
   [[ $answer == "s" || $answer == "S" ]] || die "cancelado"
 fi
 
@@ -106,6 +115,15 @@ if gcloud run worker-pools describe "$WORKER_POOL" --project="$PROJECT_ID" --reg
   gcloud run worker-pools delete "$WORKER_POOL" --project="$PROJECT_ID" --region="$REGION" --quiet
 else
   skip "$WORKER_POOL"
+fi
+
+# El mapeo de dominio apunta al servicio: se borra antes que él, para no dejar un mapeo huérfano
+step "Mapeo de dominio ${API_DOMAIN}"
+if gcloud beta run domain-mappings describe --domain="$API_DOMAIN" --project="$PROJECT_ID" --region="$REGION" \
+  >/dev/null 2>&1; then
+  gcloud beta run domain-mappings delete --domain="$API_DOMAIN" --project="$PROJECT_ID" --region="$REGION" --quiet
+else
+  skip "$API_DOMAIN"
 fi
 
 step "Servicio ${API_SERVICE}"
@@ -164,5 +182,6 @@ cat <<'EOF'
     - la federación de identidad (pool locker-github y proveedor github)
     - el presupuesto «locker-api», en la cuenta de facturación
     - las APIs activadas
+    - el dominio lockerapi.dev y sus registros DNS en Vercel (inofensivos: sin mapeo, api.lockerapi.dev no responde)
     Ojo: Cloud SQL no deja reutilizar el nombre «locker-db» hasta una semana después de borrarla.
 EOF
