@@ -7,8 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from locker.lockers.schemas import Size
 
-# Estados de una entrega: reservada, depositada en la taquilla o recogida por el residente
-type DeliveryStatus = Literal["PENDING", "DEPOSITED", "PICKED_UP"]
+# Estados de una entrega: reservada, depositada en la taquilla, recogida por el residente o caducada sin depositar.
+# EXPIRED es un valor nuevo de F6: un cliente con una lista cerrada de estados debe tolerar los que no conoce (A24)
+type DeliveryStatus = Literal["PENDING", "DEPOSITED", "PICKED_UP", "EXPIRED"]
 
 
 class ReservationIn(BaseModel):

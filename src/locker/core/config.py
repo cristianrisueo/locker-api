@@ -51,7 +51,7 @@ class ApiKey(BaseModel):
 
 class Settings(DatabaseSettings):
     """
-    Configuración completa de la API (y, más adelante, del worker).
+    Configuración completa de la API y del worker.
     Hereda la de la base de datos, así que se puede pasar donde se pida un DatabaseSettings
     """
 
@@ -76,6 +76,10 @@ class Settings(DatabaseSettings):
     outbox_max_attempts: int = 5
     outbox_backoff_base_seconds: float = 2
     outbox_poll_interval_seconds: float = 1
+
+    # Caducidad: segundos que dura una reserva sin depositar antes de que el worker la dé por caducada y libere su
+    # taquilla (30 minutos por defecto). Entero mayor que 0: con 0 o menos, cada reserva nacería ya caducada
+    reservation_ttl_seconds: int = Field(default=1800, gt=0)
 
     @field_validator("api_keys")
     @classmethod

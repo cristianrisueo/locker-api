@@ -1,5 +1,6 @@
 # Repositorio de entregas: define la interfaz y su implementación sobre PostgreSQL.
 import uuid
+from datetime import timedelta
 from typing import NamedTuple, Protocol
 
 from sqlalchemy import func, insert, select, update
@@ -39,6 +40,13 @@ class PickedUpDelivery(NamedTuple):
     locker_id: uuid.UUID
 
 
+class ExpiredDelivery(NamedTuple):
+    """Una reserva recién caducada y la taquilla que ocupaba, que el servicio libera a continuación."""
+
+    delivery_id: uuid.UUID
+    locker_id: uuid.UUID
+
+
 class DeliveryNotice(NamedTuple):
     """Lo mínimo para avisar al residente de una entrega: a quién, en qué taquilla y en qué edificio."""
 
@@ -50,9 +58,9 @@ class DeliveryNotice(NamedTuple):
 class DeliveryRepository(Protocol):
     """Interfaz de acceso a datos. Cualquier clase con estos métodos la cumple."""
 
-    # Crea una entrega PENDING en la taquilla asignada y la devuelve completa.
+    # Crea una entrega PENDING en la taquilla asignada, con un plazo de ttl_seconds desde ahora, y la devuelve completa.
     # Si el paquete ya tiene una entrega activa, lanza DuplicatePackageError
-    async def add(self, locker: Locker, carrier: str, data: ReservationIn) -> Delivery: ...
+    async def add(self, locker: Locker, carrier: str, data: ReservationIn, ttl_seconds: int) -> Delivery: ...
 
     # Lee la entrega con los datos de su taquilla. Con carrier, solo si es de ese transportista. None si no la encuentra
     async def get(self, delivery_id: uuid.UUID, carrier: str | None = None) -> Delivery | None: ...
@@ -66,6 +74,9 @@ class DeliveryRepository(Protocol):
     # Lee el destinatario, la etiqueta de la taquilla y el nombre del edificio de la entrega. None si no existe
     async def get_notice(self, delivery_id: uuid.UUID) -> DeliveryNotice | None: ...
 
+    # Pasa una reserva PENDING vencida, que no tenga otra transacción, a EXPIRED. None si no hay ninguna
+    async def expire_due(self) -> ExpiredDelivery | None: ...
+
 
 class SqlDeliveryRepository:
     """Implementación sobre PostgreSQL con SQLAlchemy. Nunca hace commit ni rollback: eso es cosa del servicio."""
@@ -74,7 +85,7 @@ class SqlDeliveryRepository:
         """Recibe la sesión de la petición, la misma con la que el servicio abre la transacción."""
         self._session = session
 
-    async def add(self, locker: Locker, carrier: str, data: ReservationIn) -> Delivery:
+    async def add(self, locker: Locker, carrier: str, data: ReservationIn, ttl_seconds: int) -> Delivery:
         """
         Inserta la entrega en la taquilla asignada y la devuelve con los datos de esa taquilla.
         No se comprueba antes con un SELECT si el paquete ya tiene una entrega activa: lo impide el índice
@@ -82,10 +93,16 @@ class SqlDeliveryRepository:
         """
 
         # INSERT ... RETURNING: devuelve la fila completa, también el estado PENDING que pone la base de datos.
-        # El id (UUID v7) lo genera la aplicación
+        # El id (UUID v7) lo genera la aplicación. El plazo lo calcula la base de datos: now() más ttl_seconds (A12)
         stmt = (
             insert(DeliveryModel)
-            .values(locker_id=locker.id, carrier=carrier, tracking_ref=data.tracking_ref, recipient=data.recipient)
+            .values(
+                locker_id=locker.id,
+                carrier=carrier,
+                tracking_ref=data.tracking_ref,
+                recipient=data.recipient,
+                expires_at=func.now() + timedelta(seconds=ttl_seconds),
+            )
             .returning(DeliveryModel)
         )
 
@@ -224,3 +241,46 @@ class SqlDeliveryRepository:
         return (
             None if row is None else DeliveryNotice(recipient=row.recipient, locker_label=row.label, building_name=row.name)
         )
+
+    async def expire_due(self) -> ExpiredDelivery | None:
+        """
+        Caduca una reserva vencida en UNA sola sentencia: la busca y la pasa a EXPIRED a la vez (I4, I14).
+
+        WITH vencida AS (
+            SELECT id FROM deliveries
+            WHERE status = 'PENDING' AND expires_at <= now()
+            ORDER BY expires_at, id LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE deliveries SET status = 'EXPIRED'
+        FROM vencida
+        WHERE deliveries.id = vencida.id AND deliveries.status = 'PENDING'
+        RETURNING deliveries.id, deliveries.locker_id
+        """
+
+        # La vencida: la reserva pendiente con el plazo más antiguo (el índice parcial ix_deliveries_pending_expiry
+        # sostiene la búsqueda). FOR UPDATE la bloquea hasta el final de la transacción; SKIP LOCKED salta las que
+        # tiene bloqueadas otra transacción (otro worker, o un depósito en curso) en vez de esperarlas
+        due = (
+            select(DeliveryModel.id)
+            .where(DeliveryModel.status == "PENDING", DeliveryModel.expires_at <= func.now())
+            .order_by(DeliveryModel.expires_at, DeliveryModel.id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+            .cte("vencida")
+        )
+
+        # El UPDATE vuelve a exigir PENDING (I4): es la misma condición por la que compite depositar, y solo uno de
+        # los dos cambia la fila. Devuelve la entrega y su taquilla, que es la que hay que liberar.
+        # synchronize_session=False: no hace falta actualizar objetos en memoria, la fila se lee del RETURNING
+        stmt = (
+            update(DeliveryModel)
+            .where(DeliveryModel.id == due.c.id, DeliveryModel.status == "PENDING")
+            .values(status="EXPIRED")
+            .returning(DeliveryModel.id, DeliveryModel.locker_id)
+            .execution_options(synchronize_session=False)
+        )
+
+        # Una fila si ha caducado una reserva; ninguna si no había ninguna vencida libre
+        row = (await self._session.execute(stmt)).one_or_none()
+        return None if row is None else ExpiredDelivery(delivery_id=row.id, locker_id=row.locker_id)

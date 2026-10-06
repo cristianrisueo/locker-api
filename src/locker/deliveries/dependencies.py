@@ -41,9 +41,19 @@ def get_service(
 ) -> DeliveryService:
     """
     Construye el servicio con sus cinco repositorios, que comparten la sesión de la petición, y el secreto del
-    código de recogida, que llega de la configuración (los tests la sustituyen con dependency_overrides)
+    código de recogida y el plazo de las reservas, que llegan de la configuración (los tests la sustituyen con
+    dependency_overrides)
     """
-    return DeliveryService(session, deliveries, lockers, buildings, idempotency, outbox, settings.pickup_code_secret)
+    return DeliveryService(
+        session,
+        deliveries,
+        lockers,
+        buildings,
+        idempotency,
+        outbox,
+        settings.pickup_code_secret,
+        settings.reservation_ttl_seconds,
+    )
 
 
 # Atajo para reutilizar en las rutas: inyecta el servicio de entregas ya construido

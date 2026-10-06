@@ -1,5 +1,6 @@
 # Reservar por la API: asignación de taquilla, errores y paquetes duplicados.
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -7,6 +8,8 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from locker.core.config import Settings, get_settings
+from locker.main import app
 from tests.integration.conftest import CrearEdificio, Reservar
 
 
@@ -185,3 +188,51 @@ async def test_cuerpo_invalido_devuelve_422(
 
     assert respuesta.status_code == 422
     assert respuesta.json() == {"code": "VALIDATION_ERROR", "detail": detail}
+
+
+async def ahora(session: AsyncSession) -> datetime:
+    """La hora de la base de datos. Cierra la transacción: now() es la hora de inicio de la transacción en curso."""
+    instante: datetime = (await session.execute(text("SELECT now()"))).scalar_one()
+    await session.rollback()
+    return instante
+
+
+async def test_reservar_fija_el_plazo_en_la_base_de_datos_sin_exponerlo(
+    session: AsyncSession,
+    client: AsyncClient,
+    settings: Settings,
+    crear_edificio: CrearEdificio,
+    reservar: Reservar,
+    cabeceras_transportista: dict[str, str],
+) -> None:
+    """
+    «[F6-02]» Reservar fija expires_at con la hora de la base de datos más RESERVATION_TTL_SECONDS: queda entre la
+    hora de antes de reservar y la de después, cada una más el plazo. Se usa un plazo de 120 s, distinto del de por
+    defecto y del de la migración (30 minutos), para ver que sale de la configuración. El plazo no se expone: la
+    respuesta tiene los mismos campos que antes de F6
+    """
+    app.dependency_overrides[get_settings] = lambda: settings.model_copy(update={"reservation_ttl_seconds": 120})
+    edificio = await crear_edificio({"M": 1})
+
+    antes = await ahora(session)
+    respuesta = await reservar(cabeceras_transportista, edificio)
+    despues = await ahora(session)
+
+    assert respuesta.status_code == 201
+    assert sorted(respuesta.json()) == sorted(
+        [
+            "id",
+            "status",
+            "building_id",
+            "locker_label",
+            "size",
+            "carrier",
+            "tracking_ref",
+            "recipient",
+            "deposited_at",
+            "picked_up_at",
+        ]
+    )
+    consulta = text("SELECT expires_at FROM deliveries WHERE id = :id")
+    expires_at = (await session.execute(consulta, {"id": respuesta.json()["id"]})).scalar_one()
+    assert antes + timedelta(seconds=120) <= expires_at <= despues + timedelta(seconds=120)

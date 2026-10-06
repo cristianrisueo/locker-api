@@ -37,7 +37,8 @@ ejercicio de aprendizaje. De ahí dos reglas que mandan sobre todo lo demás:
   usa es código muerto.
 - **Lo importante es poder explicarlo.** Cada decisión de §15 tiene su motivo, y se defiende en la entrevista.
 
-Objetivo de tiempo: unos dos días de trabajo. El núcleo son las fases F0 a F5 (`docs/plan_fases.md`).
+Objetivo de tiempo: unos dos días de trabajo. El núcleo son las fases F0 a F5 (`docs/plan_fases.md`); F6 (caducidad de
+reservas) se añade después.
 
 ### 1.1 Qué debe demostrar (requisitos de la oferta)
 
@@ -62,6 +63,7 @@ Objetivo de tiempo: unos dos días de trabajo. El núcleo son las fases F0 a F5 
 - Reserva de una taquilla por parte del transportista, idempotente y segura bajo concurrencia.
 - Depósito del paquete y recogida por parte del residente con un código derivado.
 - Aviso al residente al depositar, mediante outbox transaccional en PostgreSQL y un worker con reintentos.
+- Caducidad de las reservas que no se depositan, por el worker.
 - Autenticación por clave de API con roles (operador, transportista).
 - Logs en JSON con identificador de petición.
 - Entorno local en contenedores con dos réplicas de la API y un worker; tests unitarios, de integración y E2E; CI.
@@ -77,7 +79,6 @@ Objetivo de tiempo: unos dos días de trabajo. El núcleo son las fases F0 a F5 
 | Despliegue en producción (CD), proxy, HTTPS                   | Fuera de plazo; el PDF explica cómo se haría                                          |
 | JWT, usuarios, contraseñas, cuenta de residente               | La clave de API cubre la integración máquina a máquina                                |
 | Límite de intentos al recoger                                 | Bloquear tiene costes (bloqueo malicioso) y exige diseño de desbloqueo (supuesto A1)  |
-| Caducidad de reservas (antigua F6)                            | Opcional; no se define nada hasta valorar si entra al terminar el núcleo              |
 | Listados, paginación, borrar o modificar edificios y taquillas, cancelar reservas | Ninguno demuestra nada nuevo                                       |
 | Métricas, trazas y alertas                                    | Solo logs; el resto va al PDF como «qué haría con más tiempo»                         |
 | Tabla de transportistas o de residentes                       | El transportista es el nombre de su clave; el residente es un texto (`recipient`)     |
@@ -95,7 +96,7 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A3  | La transacción queda abierta mientras se envía el aviso                            | Aceptable con el notificador de log; con un proveedor lento habría que rediseñarlo             |
 | A4  | Los eventos muertos no avisan a nadie y no hay herramienta para revisarlos         | Se reactivan con una sentencia SQL documentada en el README                                    |
 | A5  | El notificador de log escribe el código de recogida en claro                       | Solo es aceptable en una demostración                                                          |
-| A6  | Una reserva que nunca se deposita deja la taquilla ocupada para siempre            | No hay caducidad (F6 no especificada)                                                          |
+| A6  | Una reserva que no se deposita caduca a los 30 minutos (F6); el transportista no conoce el plazo | El plazo (`expires_at`) no se expone en la API: el transportista descubre la caducidad al consultar y ver `EXPIRED` |
 | A7  | Las claves de API están en la configuración                                        | Sin revocación individual ni rotación sin reiniciar                                            |
 | A8  | El nombre del transportista distingue mayúsculas (`SEUR` ≠ `seur`)                 | Se compara tal cual                                                                            |
 | A9  | No hay despliegue en producción                                                    | De CI/CD solo hay CI; el PDF lo argumenta                                                      |
@@ -112,6 +113,9 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A20 | Una reserva puede recibir `NO_LOCKER_AVAILABLE` aunque haya una taquilla que va a quedar libre: `SKIP LOCKED` salta las taquillas que otra reserva en curso tiene bloqueadas | Si otra reserva retiene la única taquilla libre de esa talla y después se deshace (por ejemplo, con `DUPLICATE_PACKAGE`), esta recibe el `409` aunque la taquilla vuelva a estar libre. Complementa a A10. El cliente puede reintentar; desde F3 es seguro con la misma `Idempotency-Key`, porque una reserva fallida no la guarda (I8) |
 | A21 | Un error de la propia base de datos al construir el aviso deja inutilizable la transacción del worker | El fallo no se puede apuntar: el evento no suma intentos, se reintenta en cada pausa y nunca llega a muerto. Es improbable (solo hay lecturas); un `SAVEPOINT` alrededor de construir y enviar lo evitaría |
 | A22 | Un `SIGTERM` recibido durante el primer segundo y pico de vida del contenedor del worker puede perderse | Todavía no se ha instalado el manejador de señales y Docker lo termina al acabar el plazo de gracia. En ese momento no hay ningún evento en curso, así que no se pierde nada |
+| A23 | El TTL de la reserva es único por despliegue (`RESERVATION_TTL_SECONDS`), no por transportista ni por edificio | Un transportista o un edificio que necesite otro plazo no puede tenerlo |
+| A24 | Un cliente con una lista cerrada de estados debe tolerar valores desconocidos: `EXPIRED` es un valor nuevo en `/v1` | Añadir un valor a un enum se trata como cambio compatible (§8.5); un cliente que no lo tolere falla al ver `EXPIRED` |
+| A25 | Caducar no avisa a nadie (no hay evento)                                           | Ni el transportista ni el residente reciben aviso; la caducidad solo deja una línea de log      |
 
 ---
 
@@ -174,17 +178,26 @@ Restricciones e índices:
 | `carrier`       | `String(100)`  | NOT NULL. Nombre del transportista, tomado de su clave de API            |
 | `tracking_ref`  | `String(64)`   | NOT NULL. Referencia del paquete                                         |
 | `recipient`     | `String(255)`  | NOT NULL. Texto libre (un correo o un teléfono) a quien se avisa         |
-| `status`        | `String(10)`   | NOT NULL, por defecto `PENDING`. `PENDING`, `DEPOSITED` o `PICKED_UP`    |
+| `status`        | `String(10)`   | NOT NULL, por defecto `PENDING`. `PENDING`, `DEPOSITED`, `PICKED_UP` o `EXPIRED` (desde F6) |
 | `deposited_at`  | `DateTime(tz)` | NULL hasta que se deposita                                               |
 | `picked_up_at`  | `DateTime(tz)` | NULL hasta que se recoge                                                 |
+| `expires_at`    | `DateTime(tz)` | **Se añade en F6.** Admite NULL. Plazo de la reserva: se fija al reservar con `now()` más `RESERVATION_TTL_SECONDS` (A12). Solo importa mientras la entrega está `PENDING`: al depositar no se toca |
 
 Restricciones e índices:
 
-- `ck_deliveries_status`: `status IN ('PENDING', 'DEPOSITED', 'PICKED_UP')`.
+- `ck_deliveries_status`: `status IN ('PENDING', 'DEPOSITED', 'PICKED_UP')`. En F6 se amplía a
+  `status IN ('PENDING', 'DEPOSITED', 'PICKED_UP', 'EXPIRED')`.
+- `ck_deliveries_pending_has_expiry` (F6): `status <> 'PENDING' OR expires_at IS NOT NULL`. Toda reserva pendiente
+  tiene plazo.
+- `ix_deliveries_pending_expiry` (F6): índice **parcial** sobre `(expires_at)` `WHERE status = 'PENDING'`. Sostiene la
+  consulta de la caducidad (§7.13).
 - `uq_deliveries_active_locker`: índice **único parcial** sobre `(locker_id)` `WHERE status IN ('PENDING', 'DEPOSITED')`.
   Una taquilla nunca tiene dos entregas activas.
 - `uq_deliveries_active_package`: índice **único parcial** sobre `(carrier, tracking_ref)`
   `WHERE status IN ('PENDING', 'DEPOSITED')`. Un paquete nunca tiene dos entregas activas.
+
+Los dos índices únicos parciales **no cambian** en F6: ya listan solo `PENDING` y `DEPOSITED`, así que una entrega
+`EXPIRED` libera la taquilla y el paquete.
 
 ### 5.5 `idempotency_keys`
 
@@ -213,7 +226,8 @@ Sin índices: las filas enviadas se borran, así que la tabla solo contiene pend
 
 ```
 Entrega:   PENDING ──depositar──▶ DEPOSITED ──recoger──▶ PICKED_UP
-Taquilla:  FREE ──reservar──▶ BUSY ──recoger──▶ FREE
+           PENDING ──caducar────▶ EXPIRED                          (desde F6)
+Taquilla:  FREE ──reservar──▶ BUSY ──recoger o caducar──▶ FREE
 ```
 
 Cada transición es un `UPDATE` condicional por el estado de origen (I4). La taquilla y la entrega cambian **en la misma
@@ -224,6 +238,7 @@ transacción**:
 | Reservar  | `FREE` → `BUSY`  | se crea en `PENDING`       | se guarda la clave de idempotencia        |
 | Depositar | —                | `PENDING` → `DEPOSITED`    | se crea el evento `delivery.deposited`    |
 | Recoger   | `BUSY` → `FREE`  | `DEPOSITED` → `PICKED_UP`  | —                                         |
+| Caducar   | `BUSY` → `FREE`  | `PENDING` → `EXPIRED`      | —                                         |
 
 ### 5.8 Migraciones
 
@@ -237,6 +252,7 @@ Una migración por tabla, con mensaje en castellano. Todas con `downgrade`.
 | 4     | crear `idempotency_keys`                   | F3   |
 | 5     | añadir `country` a `buildings`             | F3   |
 | 6     | crear `outbox_events`                      | F4   |
+| 7     | añadir caducidad a `deliveries`            | F6   |
 
 **La migración 5 es la migración con datos** (requisito 2). Sigue el patrón expand → backfill → contract:
 
@@ -247,6 +263,18 @@ Una migración por tabla, con mensaje en castellano. Todas con `downgrade`.
 `downgrade`: quitar el `CHECK` y la columna. Se añade **después** de F1 a propósito, para que exista una versión
 anterior con edificios que migrar. El campo `country` es opcional en la API (por defecto `ES`), así que añadirlo no
 rompe a ningún cliente de `/v1` (§8.5).
+
+**La migración 7** (F6) sigue el mismo patrón sobre `deliveries`:
+
+1. **Expand**: añadir `expires_at` como columna nullable.
+2. **Backfill**: a las filas `PENDING` existentes, `expires_at = now() + 30 minutos` (valor fijo en la migración, que no
+   lee la configuración); el resto se queda en NULL.
+3. **Contract**: sustituir `ck_deliveries_status` por la versión con `EXPIRED` y añadir
+   `ck_deliveries_pending_has_expiry` e `ix_deliveries_pending_expiry`.
+
+`downgrade`: quitar el índice, el `CHECK` nuevo y la columna, y restaurar el `CHECK` antiguo. Como el antiguo no admite
+`EXPIRED`, antes pasa las filas `EXPIRED` a `PICKED_UP`. Es una pérdida de información asumida (se documenta en un
+comentario de la migración): dejarlas en `PENDING` las haría ocupar la taquilla.
 
 ---
 
@@ -282,6 +310,9 @@ nombra el objeto de base de datos que la sostiene cuando lo hay. Las revisiones 
   transacción que inserta las taquillas.
 - **I13.** El worker toma el evento con `FOR UPDATE SKIP LOCKED` dentro de la misma transacción que lo procesa y lo
   borra, y nunca procesa un evento cuyo `next_attempt_at` sea nulo o futuro.
+- **I14.** La caducidad es un `UPDATE` condicional de `PENDING` a `EXPIRED`, y la liberación de la taquilla va en la
+  misma transacción. Nunca queda una entrega `EXPIRED` con su taquilla `BUSY`, ni una `DEPOSITED` con su taquilla
+  `FREE`.
 
 ---
 
@@ -385,7 +416,8 @@ El transportista sale de la clave de API. Todo en **una transacción**, en este 
    RETURNING lockers.id, lockers.label, lockers.size;
    ```
 
-5. **Crear la entrega** en `PENDING`. Si salta `uq_deliveries_active_package` → `409 DUPLICATE_PACKAGE` (el repositorio
+5. **Crear la entrega** en `PENDING`, con `expires_at = now() + RESERVATION_TTL_SECONDS` (desde F6; el plazo lo
+   calcula la base de datos, A12). Si salta `uq_deliveries_active_package` → `409 DUPLICATE_PACKAGE` (el repositorio
    lo traduce, §7.0). La taquilla vuelve a `FREE` por el rollback.
 6. **Guardar la respuesta.** `UPDATE idempotency_keys SET response_body = :respuesta`.
 7. **Confirmar** y responder `201` con la entrega (§8.4).
@@ -410,14 +442,15 @@ Sin cuerpo. En una transacción:
 3. Si no devolvió fila, se lee la entrega **del mismo transportista**:
    - No existe, o es de otro → `404 NOT_FOUND`.
    - Ya está `DEPOSITED` → `200` con la entrega tal cual, **sin segundo evento** (depositar es idempotente por estado).
-   - Está `PICKED_UP` → `409 INVALID_STATE`.
+   - Cualquier otro estado (`PICKED_UP` o, desde F6, `EXPIRED`) → `409 INVALID_STATE`.
 
 ### 7.7 Recoger — `POST /v1/deliveries/{delivery_id}/pickup` (sin clave)
 
 Cuerpo `{"code": "483920"}` (exactamente seis dígitos; si no, `422`). En una transacción, en este orden:
 
 1. La entrega no existe → `404 NOT_FOUND`.
-2. No está `DEPOSITED` → `409 INVALID_STATE` (incluye recoger sin depositar y recoger dos veces).
+2. No está `DEPOSITED` → `409 INVALID_STATE` (incluye recoger sin depositar, recoger dos veces y, desde F6, recoger
+   una entrega `EXPIRED`).
 3. El código no coincide con el derivado (§7.9) → `403 INVALID_PICKUP_CODE`. Nada cambia.
 4. `UPDATE deliveries SET status = 'PICKED_UP', picked_up_at = now() WHERE id = :id AND status = 'DEPOSITED'
    RETURNING ...`. Si no afecta a ninguna fila (otra recogida simultánea ganó) → `409 INVALID_STATE`.
@@ -452,10 +485,12 @@ enviar. Las constantes y el contenido viven en `outbox/events.py`.
 
 **Worker.** Es un proceso aparte con el mismo código: `python -m locker.outbox.worker`.
 
-- Bucle: mientras no se pida parar, llama a `process_next()`; si no había nada (devuelve `False`), duerme
-  `OUTBOX_POLL_INTERVAL_SECONDS`; si había algo, vuelve a llamar sin dormir.
-- Si `process_next()` lanza un error inesperado (por ejemplo, la base de datos no responde o el esquema aún no está
-  migrado), lo registra en el log y duerme: el worker no muere.
+- Bucle: mientras no se pida parar, en cada vuelta ejecuta una pasada del outbox (`process_next()`) y, desde F6, una
+  de caducidad (`expire_next()`, §7.13). Si ninguna de las dos tenía trabajo (las dos devuelven `False`), duerme
+  `OUTBOX_POLL_INTERVAL_SECONDS`; si alguna lo tenía, vuelve a empezar sin dormir.
+- Si una de las dos pasadas lanza un error inesperado (por ejemplo, la base de datos no responde o el esquema aún no
+  está migrado), lo registra en el log y la trata como una pasada sin trabajo; el error no impide la otra pasada y el
+  worker no muere.
 - Para con `SIGINT` y `SIGTERM` terminando el evento en curso.
 
 **`process_next() -> bool`** (`outbox/service.py`), en **una transacción** (`session.begin()`):
@@ -514,6 +549,46 @@ UPDATE outbox_events SET attempts = 0, next_attempt_at = now() WHERE next_attemp
 Ejecuta `SELECT 1` con un `asyncio.timeout(2)`. Si responde → `200 {"status": "ok"}`. Si la base de datos no responde (o
 tarda más de 2 s) → `503` con el error `SERVICE_UNAVAILABLE`. Un único endpoint sirve de comprobación de vida y de
 disponibilidad; no hay `/health/ready`.
+
+### 7.13 Caducidad de reservas (F6)
+
+Una reserva que no se deposita antes de su `expires_at` caduca: la entrega pasa a `EXPIRED` y su taquilla vuelve a
+`FREE`. Lo hace el worker (§7.10), como un segundo trabajo del mismo bucle. No hay evento ni aviso (A25).
+
+**`expire_next() -> bool`** (`deliveries/expiration.py`, clase `ExpirationService`, que recibe la sesión, el repositorio
+de entregas y el de taquillas), en **una transacción corta** (`session.begin()`, lo primero):
+
+1. Toma una entrega `PENDING` vencida y la pasa a `EXPIRED` en **una sola sentencia** (I4, I14), sin esperar a otros
+   workers:
+
+   ```sql
+   WITH vencida AS (
+       SELECT id FROM deliveries
+       WHERE status = 'PENDING' AND expires_at <= now()
+       ORDER BY expires_at, id
+       LIMIT 1
+       FOR UPDATE SKIP LOCKED
+   )
+   UPDATE deliveries SET status = 'EXPIRED'
+   FROM vencida
+   WHERE deliveries.id = vencida.id AND deliveries.status = 'PENDING'
+   RETURNING deliveries.id, deliveries.locker_id;
+   ```
+
+   Si no devuelve fila (no hay ninguna vencida), devuelve `False`.
+2. Libera la taquilla devuelta con el `UPDATE` condicional de §7.7, paso 5 (`BUSY` → `FREE`), en la misma
+   transacción (I14). Si no afecta a ninguna fila, algo va muy mal (una entrega `PENDING` siempre ocupa su taquilla):
+   como al recoger, el error inesperado deshace toda la transacción y la entrega sigue `PENDING`.
+3. Escribe una línea de log `INFO` con el `delivery_id`.
+4. Devuelve `True`.
+
+**Carrera con depositar.** Depositar (§7.6) y caducar compiten por el mismo estado de origen, `PENDING`, con un
+`UPDATE` condicional (I4): gana uno. Si gana depositar, la caducidad no encuentra la fila (el `SKIP LOCKED` la salta
+mientras está bloqueada, y la condición `status = 'PENDING'` la descarta después); si gana caducar, el depósito no
+devuelve fila y responde `409 INVALID_STATE`.
+
+**Dos workers.** `SKIP LOCKED` hace que cada worker tome una entrega distinta sin esperar al otro, y la condición
+`status = 'PENDING'` del `UPDATE` impide que una misma entrega caduque dos veces.
 
 ---
 
@@ -594,6 +669,10 @@ La lista es **cerrada**: un código que no está aquí no se devuelve nunca, y c
 }
 ```
 
+`status` es `PENDING`, `DEPOSITED`, `PICKED_UP` o, desde F6, `EXPIRED`. El plazo de la reserva (`expires_at`) **no** se
+expone en ninguna respuesta. Una reserva repetida con la misma `Idempotency-Key` devuelve la respuesta original (con
+`status` `PENDING`) aunque la entrega ya haya caducado (§7.5).
+
 **Edificio**: entrada `{"name": "Edificio Sol"}` (1 a 100 caracteres) y, desde F3, `"country"` opcional (por defecto
 `"ES"`, dos letras mayúsculas). Salida `{"id", "name"}` y, desde F3, `"country"`.
 
@@ -603,6 +682,9 @@ La lista es **cerrada**: un código que no está aquí no se devuelve nunca, y c
 
 El prefijo `/v1` va en la ruta. Añadir campos opcionales, respuestas o endpoints no cambia la versión (es el caso de
 `country`). Quitar o renombrar un campo, o cambiar su significado, exige `/v2`.
+
+Un valor nuevo en un enum de la respuesta se trata como cambio compatible: es el caso de `EXPIRED` en el `status` de la
+entrega (F6). Un cliente con una lista cerrada de estados debe tolerar valores desconocidos (A24).
 
 ---
 
@@ -635,8 +717,10 @@ los `models` las tablas.
 - Para evitar ciclos entre módulos: `deliveries.service` solo importa `outbox.repository` y `outbox.events`;
   `outbox.service` importa `deliveries.repository` y `deliveries.pickup_code`; `deliveries.repository`,
   `outbox.repository` y `outbox.events` no importan nada del otro paquete.
+- `deliveries.expiration` (F6) usa solo repositorios: `deliveries.repository` y `lockers.repository`. Nunca llama a
+  servicios de otros dominios ni importa nada de `outbox`.
 - Los componentes se cablean en un solo sitio: las `dependencies.py` de cada dominio y el `main.py` (y `worker.py`
-  para el proceso del worker).
+  para el proceso del worker, que desde F6 cablea también `ExpirationService`).
 
 ---
 
@@ -687,7 +771,8 @@ locker-api/
 │   ├── buildings/
 │   ├── lockers/
 │   ├── deliveries/
-│   │   └── pickup_code.py
+│   │   ├── pickup_code.py
+│   │   └── expiration.py
 │   ├── idempotency/
 │   │   └── fingerprint.py
 │   └── outbox/
@@ -724,9 +809,9 @@ locker-api/
 | `core/logging.py`             | Formateador JSON y `configure_logging`                                            |
 | `buildings/`                  | Alta de edificios                                                                 |
 | `lockers/`                    | Alta de taquillas, capacidad y asignación/liberación de taquilla                  |
-| `deliveries/`                 | Reservar, depositar, recoger, consultar; `pickup_code.py`                         |
+| `deliveries/`                 | Reservar, depositar, recoger, consultar; `pickup_code.py`; `expiration.py` (`ExpirationService`, la caducidad de reservas, F6) |
 | `idempotency/`                | Modelo y repositorio de claves; `fingerprint.py` (huella del cuerpo)              |
-| `outbox/`                     | Modelo y repositorio de eventos; `events.py`, `notifier.py`, `service.py`, `worker.py` |
+| `outbox/`                     | Modelo y repositorio de eventos; `events.py`, `notifier.py`, `service.py`, `worker.py`. Desde F6, `worker.py` ejecuta también la caducidad (conserva el nombre histórico) |
 | `migrations/`                 | Alembic; `env.py` usa `DatabaseSettings`                                          |
 
 ---
@@ -744,6 +829,7 @@ locker-api/
 | `OUTBOX_MAX_ATTEMPTS`           | No          | `5`         | Intentos antes de dar un evento por muerto                               |
 | `OUTBOX_BACKOFF_BASE_SECONDS`   | No          | `2`         | Base de la espera entre reintentos (0 en los tests)                      |
 | `OUTBOX_POLL_INTERVAL_SECONDS`  | No          | `1`         | Pausa del worker cuando no hay eventos                                   |
+| `RESERVATION_TTL_SECONDS`       | No          | `1800`      | Plazo de una reserva antes de caducar (entero mayor que 0; F6)           |
 | `LOG_LEVEL`                     | No          | `INFO`      | Nivel de log                                                             |
 
 Validaciones al arrancar: `API_KEYS` no vacía; roles `operator` o `carrier`; los `carrier` llevan `name`; claves de
@@ -867,6 +953,7 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | D13 | Tests                          | Tres niveles, PostgreSQL real, concurrencia probada en dos niveles                         | Dobles de la base de datos; probar la concurrencia solo con E2E (lento) o solo en integración (no cubre procesos)     |
 | D14 | Salud                          | Un único `/health` que comprueba la base de datos                                          | `/health` y `/health/ready` (solo importa cuando algo reinicia contenedores según su salud)                           |
 | D15 | Notificador                    | `Protocol` con `LogNotifier` y un doble de test                                            | Interfaz «por si acaso» un broker (abstracción sin uso); envío real de correos (no aporta)                            |
+| D16 | Caducidad de reservas          | Columna `expires_at` y trabajo en el mismo worker con `UPDATE` condicional y `SKIP LOCKED` | Caducidad perezosa al reservar (la taquilla seguiría `BUSY` en la capacidad hasta que alguien reserve); proceso aparte (otra pieza sin necesidad); exponer `expires_at` (rompería el JSON de tests de fases cerradas) |
 
 ---
 
@@ -878,3 +965,4 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | 2026-10-05 | I10, A19 y §11        | Revisión de F0: contradicción detectada por Claude Code y familias sin código propio | — |
 | 2026-10-05 | A19, A20, I10 y §8.2  | Revisión de F2: el 500 es texto plano; el falso `409` por `SKIP LOCKED`; la capacidad no puede dar `403` | — |
 | 2026-10-06 | §7.7, §7.10, A21, A22 y §14.4 | Cierre del núcleo (F0 a F5): la liberación de la taquilla es condicional (I4); la espera de los reintentos es 2, 4, 8 y 16 s; dos limitaciones del worker; los tests de concurrencia deben fallar sin su protección | — |
+| 2026-10-06 | F6 (caducidad)        | Se añade la fase F6 tras cerrar el núcleo; redactada por Claude Code por encargo del desarrollador | A6, §1 y §2.2 |

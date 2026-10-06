@@ -8,7 +8,7 @@ Es una pieza de portfolio: debe ser pequeña, correcta y fácil de explicar.
 
 - `docs/especificaciones.md`: qué hace el sistema y cómo se construye (modelo de datos, invariantes, contrato HTTP,
   decisiones). Se cita por sección: «§7.5».
-- `docs/plan_fases.md`: las fases (F0 a F5), con alcance, tests, criterios de aceptación y orden de commits.
+- `docs/plan_fases.md`: las fases (F0 a F6), con alcance, tests, criterios de aceptación y orden de commits.
 - Este fichero: convenciones de trabajo y de código.
 
 Lee las secciones que necesites cuando las necesites. Si el código y las especificaciones no coinciden, **para y
