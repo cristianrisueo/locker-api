@@ -3,7 +3,7 @@
 import uuid
 
 import pytest
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,10 +28,18 @@ async def crear_taquillas(session: AsyncSession, cuantas: int) -> list[uuid.UUID
 async def insertar_entrega(
     session: AsyncSession, locker_id: uuid.UUID, tracking_ref: str, status: str = "PENDING", carrier: str = "SEUR"
 ) -> None:
-    """Inserta una entrega directamente en la tabla, sin pasar por el repositorio."""
+    """
+    Inserta una entrega directamente en la tabla, sin pasar por el repositorio. Desde F6 lleva siempre un plazo
+    (expires_at), que una PENDING necesita; su valor no importa a estos tests
+    """
     await session.execute(
         insert(DeliveryModel).values(
-            locker_id=locker_id, carrier=carrier, tracking_ref=tracking_ref, recipient="vecino@example.com", status=status
+            locker_id=locker_id,
+            carrier=carrier,
+            tracking_ref=tracking_ref,
+            recipient="vecino@example.com",
+            status=status,
+            expires_at=func.now(),
         )
     )
 

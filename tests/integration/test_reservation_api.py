@@ -197,7 +197,6 @@ async def ahora(session: AsyncSession) -> datetime:
     return instante
 
 
-@pytest.mark.xfail(strict=True, reason="reservar todavía no fija expires_at")
 async def test_reservar_fija_el_plazo_en_la_base_de_datos_sin_exponerlo(
     session: AsyncSession,
     client: AsyncClient,

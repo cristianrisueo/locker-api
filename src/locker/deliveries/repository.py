@@ -1,5 +1,6 @@
 # Repositorio de entregas: define la interfaz y su implementación sobre PostgreSQL.
 import uuid
+from datetime import timedelta
 from typing import NamedTuple, Protocol
 
 from sqlalchemy import func, insert, select, update
@@ -50,9 +51,9 @@ class DeliveryNotice(NamedTuple):
 class DeliveryRepository(Protocol):
     """Interfaz de acceso a datos. Cualquier clase con estos métodos la cumple."""
 
-    # Crea una entrega PENDING en la taquilla asignada y la devuelve completa.
+    # Crea una entrega PENDING en la taquilla asignada, con un plazo de ttl_seconds desde ahora, y la devuelve completa.
     # Si el paquete ya tiene una entrega activa, lanza DuplicatePackageError
-    async def add(self, locker: Locker, carrier: str, data: ReservationIn) -> Delivery: ...
+    async def add(self, locker: Locker, carrier: str, data: ReservationIn, ttl_seconds: int) -> Delivery: ...
 
     # Lee la entrega con los datos de su taquilla. Con carrier, solo si es de ese transportista. None si no la encuentra
     async def get(self, delivery_id: uuid.UUID, carrier: str | None = None) -> Delivery | None: ...
@@ -74,7 +75,7 @@ class SqlDeliveryRepository:
         """Recibe la sesión de la petición, la misma con la que el servicio abre la transacción."""
         self._session = session
 
-    async def add(self, locker: Locker, carrier: str, data: ReservationIn) -> Delivery:
+    async def add(self, locker: Locker, carrier: str, data: ReservationIn, ttl_seconds: int) -> Delivery:
         """
         Inserta la entrega en la taquilla asignada y la devuelve con los datos de esa taquilla.
         No se comprueba antes con un SELECT si el paquete ya tiene una entrega activa: lo impide el índice
@@ -82,10 +83,16 @@ class SqlDeliveryRepository:
         """
 
         # INSERT ... RETURNING: devuelve la fila completa, también el estado PENDING que pone la base de datos.
-        # El id (UUID v7) lo genera la aplicación
+        # El id (UUID v7) lo genera la aplicación. El plazo lo calcula la base de datos: now() más ttl_seconds (A12)
         stmt = (
             insert(DeliveryModel)
-            .values(locker_id=locker.id, carrier=carrier, tracking_ref=data.tracking_ref, recipient=data.recipient)
+            .values(
+                locker_id=locker.id,
+                carrier=carrier,
+                tracking_ref=data.tracking_ref,
+                recipient=data.recipient,
+                expires_at=func.now() + timedelta(seconds=ttl_seconds),
+            )
             .returning(DeliveryModel)
         )
 

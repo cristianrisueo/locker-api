@@ -116,7 +116,6 @@ async def columnas_de_deliveries(engine: AsyncEngine) -> list[str]:
         return [fila.column_name for fila in filas]
 
 
-@pytest.mark.xfail(strict=True, reason="la migración de caducidad todavía no existe")
 async def test_la_migracion_de_caducidad_da_plazo_a_las_reservas_pendientes(
     bd_migraciones: str, alembic: AlembicRunner
 ) -> None:
@@ -190,7 +189,11 @@ async def test_la_migracion_de_caducidad_da_plazo_a_las_reservas_pendientes(
         assert "expires_at" not in await columnas_de_deliveries(engine)
         async with engine.connect() as conn:
             estados = await conn.execute(text("SELECT id, status FROM deliveries"))
-            assert dict(estados.tuples().all()) == {pendiente: "PICKED_UP", depositada: "DEPOSITED", recogida: "PICKED_UP"}
+            assert {fila.id: fila.status for fila in estados} == {
+                pendiente: "PICKED_UP",
+                depositada: "DEPOSITED",
+                recogida: "PICKED_UP",
+            }
         with pytest.raises(IntegrityError) as error:
             async with engine.begin() as conn:
                 await conn.execute(text("UPDATE deliveries SET status = 'EXPIRED' WHERE id = :id"), {"id": pendiente})

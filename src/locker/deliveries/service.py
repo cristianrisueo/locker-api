@@ -30,11 +30,13 @@ class DeliveryService:
         idempotency: IdempotencyRepository,
         outbox: OutboxRepository,
         pickup_code_secret: SecretStr,
+        reservation_ttl_seconds: int,
     ) -> None:
         """
         Recibe la sesión de la petición (para abrir la transacción) y los repositorios que la usan: el de entregas,
         el de taquillas, el de edificios, el de claves de idempotencia y el del outbox, que comparten esa misma sesión.
-        Y el secreto con el que se comprueba el código de recogida, que sigue siendo un SecretStr hasta que se usa
+        Y el secreto con el que se comprueba el código de recogida, que sigue siendo un SecretStr hasta que se usa,
+        y el plazo de una reserva antes de caducar, en segundos
         """
         self._session = session
         self._deliveries = deliveries
@@ -43,6 +45,7 @@ class DeliveryService:
         self._idempotency = idempotency
         self._outbox = outbox
         self._pickup_code_secret = pickup_code_secret
+        self._reservation_ttl_seconds = reservation_ttl_seconds
 
     async def reserve(self, carrier: str, idempotency_key: str, data: ReservationIn) -> Delivery:
         """
@@ -76,8 +79,8 @@ class DeliveryService:
             if locker is None:
                 raise NoLockerAvailableError
 
-            # 5. Crea la entrega en la taquilla asignada
-            delivery = await self._deliveries.add(locker, carrier, data)
+            # 5. Crea la entrega en la taquilla asignada, con su plazo: si no se deposita antes, caducará (§7.13)
+            delivery = await self._deliveries.add(locker, carrier, data, self._reservation_ttl_seconds)
 
             # 6. Guarda la respuesta en la clave: es lo que recibirá un reintento, aunque la entrega cambie después
             await self._idempotency.save_response(carrier, idempotency_key, delivery.model_dump(mode="json"))
