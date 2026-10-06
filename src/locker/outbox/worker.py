@@ -31,6 +31,11 @@ async def process_one(session_factory: async_sessionmaker[AsyncSession], notifie
         return await service.process_next()
 
 
+async def expire_one(session_factory: async_sessionmaker[AsyncSession]) -> bool:
+    """Una pasada de la caducidad: caduca la siguiente reserva vencida con una sesión nueva."""
+    raise NotImplementedError
+
+
 async def pause(stop: asyncio.Event, seconds: float) -> None:
     """
     Espera los segundos indicados o hasta que se pida parar, lo que llegue antes. No es un sleep: si llega la
