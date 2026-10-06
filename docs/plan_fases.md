@@ -15,7 +15,7 @@
 7. F4 — Depositar, recoger y consultar
 8. F5 — Worker y notificador
 9. Cierre del núcleo
-10. F6 (opcional, sin especificar)
+10. F6 — Caducidad de reservas
 
 ---
 
@@ -87,8 +87,9 @@ Al terminar: make check, make test (y make e2e si la fase lo pide), sube la rama
 | F3   | Idempotencia y migración con datos  | `fase/F3-idempotencia`          | 11    | `Idempotency-Key`; migración de `country` con datos                         |
 | F4   | Depositar, recoger y consultar      | `fase/F4-depositar-y-recoger`   | 14    | Ciclo de vida de la entrega; el depósito escribe el evento                  |
 | F5   | Worker y notificador                | `fase/F5-worker-y-notificador`  | 12    | Aviso al residente con reintentos; sistema completo                         |
+| F6   | Caducidad de reservas               | `fase/F6-caducidad`             | 11    | Las reservas que no se depositan caducan y liberan su taquilla              |
 
-Cada fase deja `main` en verde y es utilizable por sí sola. Orden fijo: F0 → F1 → F2 → F3 → F4 → F5.
+Cada fase deja `main` en verde y es utilizable por sí sola. Orden fijo: F0 → F1 → F2 → F3 → F4 → F5 → F6.
 
 ---
 
@@ -596,12 +597,102 @@ Tras fusionar F5, quedan tareas **fuera de Claude Code** que completan el núcle
    bookstore (la transacción vive en el servicio).
 3. **Repaso de cobertura** de los siete requisitos de la oferta (§1.1), con lo que se enseña de cada uno y lo que queda
    sin cubrir (en particular, el CD).
-4. **Valorar F6** si hay tiempo.
+4. **F6 añadida** (§10); el despliegue en GCP se especificará aparte.
 
 ---
 
-## 10. F6 (opcional, sin especificar)
+## 10. F6 — Caducidad de reservas
 
-Caducidad de las reservas que nunca se depositan. **No se define nada** (ni estado, ni columna, ni job) hasta que el
-núcleo esté terminado, el PDF escrito y el desarrollador decida si entra. Cuando se decida, se añadirá a las
-especificaciones y a este plan (con una entrada en el registro de cambios) antes de lanzar la sesión.
+**Rama:** `fase/F6-caducidad`  ·  **Depende de:** F5.
+
+### Objetivo
+
+Que una reserva que no se deposita no bloquee la taquilla para siempre.
+
+### Alcance
+
+**Dentro**
+
+- Variable `RESERVATION_TTL_SECONDS` en `Settings` y `.env.example` (§12.1).
+- Migración 7, «añadir caducidad a deliveries» (§5.8), y el modelo de `deliveries`: columna `expires_at` y estado
+  `EXPIRED` (§5.4).
+- Fijar `expires_at` al reservar (§7.5, paso 5).
+- `deliveries/expiration.py` con `ExpirationService.expire_next` (§7.13) y el método de `deliveries/repository` que
+  ejecuta la sentencia de caducidad.
+- El segundo trabajo del bucle del worker (§7.10).
+- El tratamiento de `EXPIRED` al depositar, recoger y consultar (§7.6, §7.7, §8.4).
+- README: la caducidad y `RESERVATION_TTL_SECONDS`.
+
+**Fuera:** eventos o avisos de caducidad, exponer `expires_at`, TTL por transportista o por edificio, el despliegue.
+
+### Detalles de implementación
+
+- `RESERVATION_TTL_SECONDS` es un entero mayor que 0, por defecto 1800 (`Field` con `gt=0`). Llega al servicio de
+  reserva por `Settings`, igual que el secreto del código de recogida.
+- `expires_at` se calcula en la base de datos con `now()` más el TTL (A12), nunca con el reloj de Python.
+- Migración 7: §5.8, con expand, backfill y contract comentados, y el `downgrade` con la pérdida asumida explicada en un
+  comentario. El test de la migración con datos fija como **constantes** los identificadores de la revisión de
+  `outbox_events` y de la de caducidad (no usa `head`).
+- `expire_next` es exactamente §7.13: `session.begin()` es lo primero; la caducidad es **una sola sentencia** (el CTE
+  con `FOR UPDATE SKIP LOCKED` y el `UPDATE` condicional); la liberación de la taquilla reutiliza `release` de
+  `lockers/repository` y va en la misma transacción (I14); si no cambia la taquilla, error inesperado y se deshace
+  todo, como al recoger. Los repositorios no hacen `commit` ni `rollback` (I5).
+- `ExpirationService` recibe la sesión, el repositorio de entregas y el de taquillas; no llama a servicios de otros
+  dominios (§9.2). La caducidad escribe un log `INFO` con el `delivery_id`; no hay evento.
+- El `status` de los schemas admite `EXPIRED`. `expires_at` no se añade a ningún schema de respuesta (AC5).
+- Depositar (§7.6): si el `UPDATE` no devuelve fila y la entrega del mismo transportista está `DEPOSITED`, `200` tal
+  cual; cualquier otro estado (`PICKED_UP` o `EXPIRED`), `409 INVALID_STATE`.
+- `worker.py`: una función hermana de `process_one` (por ejemplo `expire_one`) abre su propia sesión y ejecuta
+  `expire_next`. En el bucle, cada tarea va en su propio `try/except`: un error inesperado en una no impide la otra ni
+  mata el proceso. El módulo, el comando de arranque y el logger no cambian.
+- El ayudante `insertar_entrega` de `tests/integration/test_deliveries_repository.py` pasa a rellenar `expires_at`: es
+  el único cambio permitido en los tests de fases anteriores.
+- En los tests no hay esperas: la caducidad se provoca fijando `expires_at` en la fila por SQL.
+
+### Tests (11 casos)
+
+| ID    | Nivel | Qué comprueba                                                                                                         | Fichero sugerido                                       |
+| ----- | ----- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| F6-01 | U     | `RESERVATION_TTL_SECONDS` vale 1800 por defecto, acepta un entero mayor que 0 y rechaza 0 y negativos                  | `tests/unit/test_settings_reservation_ttl.py`          |
+| F6-02 | I     | Reservar fija `expires_at` en la base de datos dentro de la ventana `now()` más TTL, y el cuerpo de la respuesta no incluye `expires_at` | `tests/integration/test_reservation_api.py` |
+| F6-03 | I     | `expire_next` pasa una entrega `PENDING` vencida a `EXPIRED` y su taquilla a `FREE` en la misma transacción, y devuelve `True` | `tests/integration/test_expiration_service.py` |
+| F6-04 | I     | No caduca lo que no toca (`PENDING` no vencida, `DEPOSITED` con `expires_at` pasado, `PICKED_UP`) y devuelve `False` sin efectos | `tests/integration/test_expiration_service.py` |
+| F6-05 | I     | Tras caducar, el mismo paquete y la misma taquilla pueden reservarse otra vez y la capacidad cuenta la taquilla como libre | `tests/integration/test_expiration_service.py` |
+| F6-06 | I     | Depositar o recoger una entrega `EXPIRED` → `409 INVALID_STATE`; consultarla → `200` con `status` `EXPIRED`              | `tests/integration/test_expiration_api.py`             |
+| F6-07 | I     | Carrera depositar contra caducar sobre entregas vencidas, repetida varias veces: gana exactamente uno y el estado final es coherente (`DEPOSITED` con la taquilla `BUSY`, o `EXPIRED` con la taquilla `FREE`; nunca otra combinación) | `tests/integration/test_expiration_concurrency.py` |
+| F6-08 | I     | Dos workers a la vez con N entregas vencidas (N ≤ 10): cada una caduca exactamente una vez y todas las taquillas quedan `FREE` | `tests/integration/test_expiration_concurrency.py` |
+| F6-09 | I     | **Migración con datos:** se migra hasta la revisión de `outbox_events`, se insertan entregas `PENDING`, `DEPOSITED` y `PICKED_UP`, se migra a la de caducidad: las `PENDING` reciben `expires_at` y las demás quedan en NULL; el `CHECK` rechaza una `PENDING` sin `expires_at` y admite `EXPIRED`; el `downgrade` pasa las `EXPIRED` a `PICKED_UP` y quita la columna; volver a subir funciona | `tests/integration/test_migrations.py` |
+| F6-10 | I     | El bucle del worker ejecuta las dos tareas (outbox y caducidad) y un error inesperado en una no impide la otra; los tests de F5-11 siguen pasando | `tests/integration/test_worker.py` |
+| F6-11 | E     | Una reserva caduca de verdad en el sistema en contenedores: se reserva, se fuerza `expires_at` al pasado por SQL con el engine de SQLAlchemy (`create_engine(get_settings())` y `text(...)`, como F5-12, porque `asyncpg` no trae información de tipos y no pasa mypy estricto) y se espera, con un máximo de 10 s, a que la consulta devuelva `EXPIRED` | `tests/e2e/test_reservation_expiry.py` |
+
+### Criterios de aceptación
+
+- **AC1.** `make check` y `make test` pasan; F6-01 a F6-10 existen y no quedan `xfail`. El test de migraciones genérico
+  (F1-12) cubre la migración 7.
+- **AC2.** `make e2e` pasa, incluido F6-11.
+- **AC3.** La caducidad es una sola sentencia `UPDATE` condicional y la liberación de la taquilla va en la misma
+  transacción (I14).
+- **AC4.** Los tests de fases anteriores pasan sin editarse, salvo el ayudante `insertar_entrega` (excepción declarada
+  arriba).
+- **AC5.** Ninguna respuesta incluye `expires_at`.
+- **AC6.** El README documenta `RESERVATION_TTL_SECONDS` y la caducidad.
+- **AC7.** Se cumple la definición de «hecho» (§1.2).
+
+### Orden de commits
+
+1. `test:` `RESERVATION_TTL_SECONDS` (rojo) → `feat:` la variable en la configuración (F6-01).
+2. `test:` migración de caducidad con datos (rojo) → `feat:` migración 7, modelo y estado `EXPIRED` (F6-09).
+3. `test:` fijar `expires_at` al reservar (rojo) → `feat:` plazo de la reserva (F6-02).
+4. `test:` `expire_next` (rojo) → `feat:` `ExpirationService.expire_next` y su repositorio (F6-03 a F6-05).
+5. `test:` `EXPIRED` al depositar, recoger y consultar (rojo) → `feat:` su tratamiento y el `status` de los schemas
+   (F6-06).
+6. `test:` carrera con depositar y dos workers a la vez (rojo → verde): F6-07 y F6-08.
+7. `test:` bucle del worker con las dos tareas (rojo) → `feat:` segundo trabajo del worker (F6-10).
+8. `test:` E2E de la caducidad (F6-11).
+9. `docs:` README (caducidad y `RESERVATION_TTL_SECONDS`).
+
+### Puntos críticos de la revisión
+
+La sentencia de caducidad (CTE, `SKIP LOCKED`, `UPDATE` condicional) y la liberación de la taquilla en la misma
+transacción; la carrera con depositar; la migración con datos y su `downgrade` con pérdida asumida; el bucle del worker
+con dos tareas independientes.
