@@ -1,0 +1,158 @@
+# Despliegue continuo en Google Cloud (fase F7, docs/especificaciones.md §13.5).
+# Verifica lo mismo que el CI y, solo si pasa, construye la imagen, migra, despliega la API y el worker y pasa el smoke.
+# La infraestructura que no cambia entre despliegues (Cloud SQL, secretos, permisos...) la prepara deploy/setup.sh.
+name: CD
+
+# A mano desde la pestaña Actions, o al subir una etiqueta v* (por ejemplo v0.1.0-gcp1). Nunca en cada push a main:
+# cada despliegue gasta presupuesto, así que lo decide el desarrollador.
+# workflow_dispatch solo aparece cuando este fichero ya está en la rama principal; antes, se lanza con una etiqueta
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+# id-token: write deja pedir a GitHub un token OIDC firmado, que Google cambia por credenciales temporales de
+# locker-deployer (federación de identidad). Así no hay claves de cuenta de servicio guardadas en GitHub.
+# contents: read, para descargar el código
+permissions:
+  contents: read
+  id-token: write
+
+# Un despliegue cada vez. Uno nuevo espera a que termine el anterior en vez de cancelarlo: cortar un despliegue a
+# medias podría dejar las migraciones aplicadas y la API sin actualizar
+concurrency:
+  group: cd
+  cancel-in-progress: false
+
+jobs:
+  # Los mismos pasos que ci.yml: si algo falla aquí, deploy no llega a empezar
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      - run: make check
+
+      - run: git diff --exit-code
+
+      - run: make test
+
+  deploy:
+    # Solo empieza si verify terminó bien
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Todo sale de las variables del repositorio (vars, no secretos), que imprime deploy/setup.sh.
+    # Ningún secreto pasa por el workflow: Cloud Run lee API_KEYS, PICKUP_CODE_SECRET y DATABASE_URL de Secret Manager
+    # al arrancar cada contenedor (--set-secrets), así que no hay nada que ocultar con ::add-mask::
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      # La imagen se etiqueta con el SHA del commit: cada despliegue sabe exactamente qué código lleva
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/locker/locker:${{ github.sha }}
+      # Instancia de Cloud SQL (proyecto:región:nombre). Cloud Run monta su socket en /cloudsql/<instancia>
+      SQL_INSTANCE: ${{ vars.GCP_PROJECT_ID }}:${{ vars.GCP_REGION }}:locker-db
+      # La identidad con la que se ejecutan los contenedores: solo lee secretos y se conecta a Cloud SQL
+      RUNTIME_SA: locker-runtime@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+      # Variable de entorno del contenedor = secreto:versión
+      APP_SECRETS: DATABASE_URL=locker-db-url:latest,API_KEYS=locker-api-keys:latest,PICKUP_CODE_SECRET=locker-pickup-secret:latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Falla pronto y con un mensaje claro si falta alguna variable del repositorio
+      - name: Comprobar las variables del repositorio
+        run: |
+          for name in GCP_PROJECT_ID GCP_REGION GCP_WIF_PROVIDER GCP_DEPLOYER_SA; do
+            if [ -z "$(printenv "$name")" ]; then
+              echo "::error::Falta la variable del repositorio $name (la imprime deploy/setup.sh)"
+              exit 1
+            fi
+          done
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SA }}
+
+      # Federación de identidad: cambia el token OIDC de esta ejecución por credenciales temporales de
+      # locker-deployer. El proveedor solo acepta tokens de este repositorio (attribute-condition)
+      - uses: google-github-actions/auth@v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      # Instala gcloud y lo deja autenticado con esas credenciales
+      - uses: google-github-actions/setup-gcloud@v3.0.1
+
+      # La misma imagen del Dockerfile para la API, el worker y las migraciones; solo cambia el comando
+      - name: Construir y publicar la imagen
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build --tag "$IMAGE" .
+          docker push "$IMAGE"
+
+      # Migraciones antes de desplegar, nunca al arrancar (§12.2). El job se crea o se actualiza con la imagen nueva y
+      # se ejecuta esperando a que termine: si la migración falla, el paso falla y no se despliega nada.
+      # Solo necesita DATABASE_URL (Alembic usa DatabaseSettings). Sin reintentos: una migración fallida se revisa a mano.
+      # jobs deploy no tiene --add-cloudsql-instances; con una sola instancia, --set-cloudsql-instances es lo mismo
+      - name: Migrar la base de datos (job locker-migrate)
+        run: |
+          gcloud run jobs deploy locker-migrate --project="$PROJECT_ID" --region="$REGION" \
+            --image="$IMAGE" --command=alembic --args=upgrade,head \
+            --service-account="$RUNTIME_SA" --set-secrets="DATABASE_URL=locker-db-url:latest" \
+            --set-cloudsql-instances="$SQL_INSTANCE" \
+            --cpu=1 --memory=512Mi --max-retries=0 --task-timeout=10m --quiet
+          gcloud run jobs execute locker-migrate --project="$PROJECT_ID" --region="$REGION" --wait
+
+      # La API: de 0 a 2 instancias (sin tráfico no hay instancias encendidas ni coste), 1 vCPU y 512 MiB.
+      # Pública: la protegen las claves de API de la aplicación (A27). Cloud Run da el HTTPS
+      - name: Desplegar la API (servicio locker-api)
+        run: |
+          gcloud run deploy locker-api --project="$PROJECT_ID" --region="$REGION" \
+            --image="$IMAGE" --port=8000 --min-instances=0 --max-instances=2 --cpu=1 --memory=512Mi \
+            --allow-unauthenticated --service-account="$RUNTIME_SA" --set-secrets="$APP_SECRETS" \
+            --add-cloudsql-instances="$SQL_INSTANCE" --quiet
+
+      # El worker: un worker pool (procesos en segundo plano, sin peticiones HTTP) con una instancia siempre encendida,
+      # que envía los avisos del outbox y caduca las reservas
+      - name: Desplegar el worker (worker pool locker-worker)
+        run: |
+          gcloud run worker-pools deploy locker-worker --project="$PROJECT_ID" --region="$REGION" \
+            --image="$IMAGE" --command=python --args=-m,locker.outbox.worker \
+            --instances=1 --cpu=1 --memory=512Mi \
+            --service-account="$RUNTIME_SA" --set-secrets="$APP_SECRETS" \
+            --add-cloudsql-instances="$SQL_INSTANCE" --quiet
+
+      # La URL pública de la API (https://locker-api-<...>.run.app). No es un secreto
+      - name: Obtener la URL de la API
+        id: api
+        run: |
+          url=$(gcloud run services describe locker-api --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)')
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "API desplegada en $url"
+
+      # Con 0 instancias mínimas, la primera petición arranca un contenedor y abre la conexión con Cloud SQL: se
+      # reintenta /health hasta que responde 200 (como mucho 10 intentos, 6 s entre ellos)
+      - name: Calentar la API
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 6 --retry-all-errors --max-time 10 \
+            "${{ steps.api.outputs.url }}/health"
+
+      # El smoke de F0-07 contra la URL desplegada: /health da 200 {"status": "ok"}. No necesita .env
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      - name: Smoke contra la API desplegada
+        run: make smoke BASE_URLS="${{ steps.api.outputs.url }}"
