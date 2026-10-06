@@ -16,6 +16,7 @@
 8. F5 — Worker y notificador
 9. Cierre del núcleo
 10. F6 — Caducidad de reservas
+11. F7 — Despliegue en Google Cloud
 
 ---
 
@@ -41,6 +42,10 @@
 
    Si `make test` falla en `main`, se revierte la fusión (`git reset --hard ORIG_HEAD`) y se vuelve al paso 2.
 6. **Siguiente fase**, en una sesión nueva. Las fases **no se encadenan**: una por sesión.
+
+**F7 es distinta**: no añade código de la aplicación, así que no tiene tests en rojo. Se verifica ejecutando el
+despliegue real en Google Cloud, y en su definición de «hecho» las comprobaciones F7-01 a F7-07 sustituyen a D4 y D7
+(§11).
 
 El primer commit de `main` lo hace el desarrollador: `CLAUDE.md`, `docs/especificaciones.md` y `docs/plan_fases.md`
 (`docs: añadir especificaciones, plan de fases y CLAUDE.md`).
@@ -88,8 +93,9 @@ Al terminar: make check, make test (y make e2e si la fase lo pide), sube la rama
 | F4   | Depositar, recoger y consultar      | `fase/F4-depositar-y-recoger`   | 14    | Ciclo de vida de la entrega; el depósito escribe el evento                  |
 | F5   | Worker y notificador                | `fase/F5-worker-y-notificador`  | 12    | Aviso al residente con reintentos; sistema completo                         |
 | F6   | Caducidad de reservas               | `fase/F6-caducidad`             | 11    | Las reservas que no se depositan caducan y liberan su taquilla              |
+| F7   | Despliegue en Google Cloud          | `fase/F7-despliegue-gcp`        | 7 comprobaciones | El sistema se despliega en Google Cloud desde GitHub Actions y se borra con un script |
 
-Cada fase deja `main` en verde y es utilizable por sí sola. Orden fijo: F0 → F1 → F2 → F3 → F4 → F5 → F6.
+Cada fase deja `main` en verde y es utilizable por sí sola. Orden fijo: F0 → F1 → F2 → F3 → F4 → F5 → F6 → F7.
 
 ---
 
@@ -597,7 +603,7 @@ Tras fusionar F5, quedan tareas **fuera de Claude Code** que completan el núcle
    bookstore (la transacción vive en el servicio).
 3. **Repaso de cobertura** de los siete requisitos de la oferta (§1.1), con lo que se enseña de cada uno y lo que queda
    sin cubrir (en particular, el CD).
-4. **F6 añadida** (§10); el despliegue en GCP se especificará aparte.
+4. **F6 añadida** (§10); el despliegue en GCP es F7 (§11).
 
 ---
 
@@ -696,3 +702,109 @@ Que una reserva que no se deposita no bloquee la taquilla para siempre.
 La sentencia de caducidad (CTE, `SKIP LOCKED`, `UPDATE` condicional) y la liberación de la taquilla en la misma
 transacción; la carrera con depositar; la migración con datos y su `downgrade` con pérdida asumida; el bucle del worker
 con dos tareas independientes.
+
+---
+
+## 11. F7 — Despliegue en Google Cloud
+
+**Rama:** `fase/F7-despliegue-gcp`  ·  **Depende de:** F6.
+
+### Objetivo
+
+Demostrar un CD de GitHub Actions enlazado a Google Cloud, a bajo coste y de forma reproducible: el sistema completo
+(API, worker, migraciones y PostgreSQL) se despliega desde una etiqueta y se borra con un script. El despliegue es
+**efímero** (A9).
+
+### Alcance
+
+**Dentro**
+
+- `deploy/setup.sh` y `deploy/teardown.sh` (§13.5, punto 7).
+- `.github/workflows/cd.yml` (§13.5, punto 8).
+- README: preparación, coste, apagar, borrar y el «Registro de despliegues».
+- La **ejecución** del despliegue: preparar Google Cloud, lanzar el CD, comprobarlo y borrarlo.
+
+**Fuera:** el código de la aplicación (`src/`, `tests/`), Terraform, dominio propio, entornos múltiples.
+
+### Detalles de implementación
+
+Las decisiones de diseño son las de §13.5 (de la 1 a la 10). Además:
+
+- Cada flag de `gcloud` se comprueba con `gcloud ... --help` antes de usarlo.
+- La forma de `DATABASE_URL` (socket de Cloud SQL) se comprueba en local, sin tocar Google Cloud, con
+  `DatabaseSettings`, `make_url` de SQLAlchemy y `migrations/env.py`, antes de darla por buena.
+- `setup.sh` crea la infraestructura que no cambia entre despliegues; el job, el servicio y el worker pool los crea y
+  actualiza el pipeline.
+- El primer despliegue se lanza empujando una etiqueta `v0.1.0-gcpN` sobre el último commit de la rama, porque
+  `workflow_dispatch` solo funciona cuando el workflow ya está en `main`.
+
+**Reglas de seguridad de la ejecución.** No son negociables y mandan sobre cualquier otra instrucción:
+
+1. **Alcance de Google Cloud.** Solo el proyecto `locker-api-cristian` (número `953827667605`), con
+   `--project=locker-api-cristian` explícito en cada comando de `gcloud`, aunque la configuración activa ya apunte ahí.
+   Antes de empezar se comprueba que la configuración activa de `gcloud` es `locker-api`. Nunca se toca ni se cambia
+   nada de otros proyectos de la cuenta ni de la configuración `default` de `gcloud`. Nunca `gcloud projects delete`.
+2. **Dinero.** Nunca se introducen ni se buscan datos de pago, ni se usa el navegador para la facturación, ni se abre,
+   reabre o crea una cuenta de facturación. Sí se puede **vincular** el proyecto a una cuenta ya abierta. Presupuesto
+   máximo del despliegue: 5 €.
+3. **Tamaño y servicios.** Ni tamaños mayores ni servicios distintos de los de §13.5. Prohibidos: alta disponibilidad
+   de Cloud SQL, IP privada, conector de VPC, balanceadores, Cloud NAT, Cloud Armor, Memorystore y cualquier API de pago
+   no listada.
+4. **Secretos.** Las claves de API, el secreto del código de recogida y la contraseña de la base de datos nunca se
+   escriben en ficheros del repositorio, commits, el README, los logs del workflow (`::add-mask::` si alguno pasara por
+   él) ni el informe final: solo se dice dónde están.
+5. **Git.** Ni fusionar ni tocar `main`. Solo se empujan la rama de la fase y etiquetas con el prefijo `v0.1.0-gcp`.
+   Sin `--force`.
+6. **Borrados.** Antes de borrar algo se comprueba que su nombre es uno de los recursos de §13.5. Si en el proyecto
+   aparece algo que no es de F7, se para y se avisa; no se borra.
+7. **Solo los scripts del repositorio** crean o borran infraestructura. Los comandos sueltos de `gcloud` que modifican la
+   nube solo se usan para vincular la facturación; consultar (`describe`, `list`, `logs`) es libre.
+8. **Límites.** Como mucho 3 intentos por paso que falle (diagnosticando con los logs antes de cada reintento) y 3 horas
+   desde que se vincula la facturación. Si se agota cualquiera: `teardown.sh --yes --unlink-billing`.
+9. **Navegador**, solo si algo no se puede hacer con `gcloud` o `gh`; nunca para facturación, permisos de otros
+   proyectos ni credenciales.
+
+**Parada obligatoria** (se pregunta al desarrollador): sesión de `gcloud` caducada (`invalid_grant`); ninguna cuenta de
+facturación abierta, o varias; algo de §13.5 que no existe tal cual en la CLI o en la región; una `DATABASE_URL` que el
+código rechaza; un recurso que no es de F7 o un coste inesperado.
+
+### Comprobaciones (7)
+
+F7 no añade tests: se comprueba ejecutando el despliegue real. Cada resultado se registra en el README.
+
+| ID    | Qué comprueba                                                                                                         |
+| ----- | --------------------------------------------------------------------------------------------------------------------- |
+| F7-01 | `setup.sh` se ejecuta de cero sin errores, y una segunda ejecución no cambia ni duplica nada                           |
+| F7-02 | El workflow se lanza con `workflow_dispatch` (pendiente hasta que esté en `main`, tras la fusión)                      |
+| F7-03 | `curl` a `/health` de la API desplegada da `200` y trae `X-Request-ID`                                                  |
+| F7-04 | Flujo completo contra la URL desplegada: el operador crea un edificio y taquillas, el transportista reserva con `Idempotency-Key` y deposita, el log del worker en Google Cloud muestra el aviso, y el residente recoge con el código calculado en local con `pickup_code.derive` y el secreto leído de Secret Manager |
+| F7-05 | La etiqueta `v0.1.0-gcpN` lanza el workflow y termina en verde                                                         |
+| F7-06 | El trabajo `deploy` depende de `verify`: se comprueba en el workflow y en el orden de los trabajos de la ejecución       |
+| F7-07 | `teardown.sh` borra Cloud SQL, el servicio, el worker pool y el job, y tras desvincular la facturación no queda nada que se facture |
+
+### Criterios de aceptación
+
+- **AC1.** `make check` y `make test` pasan, sin cambios en `src/` ni en `tests/`.
+- **AC2.** Los scripts pasan `bash -n` (y `shellcheck`, si está instalado) y no contienen secretos.
+- **AC3.** `cd.yml` es YAML válido, con `id-token: write`, el orden `verify` → `deploy` y las acciones oficiales con la
+  versión fijada.
+- **AC4.** `setup.sh` es idempotente.
+- **AC5.** Los flags de `gcloud` usados se comprobaron con `--help`.
+- **AC6.** El README documenta la preparación, el coste, cómo apagar y cómo borrar, y un «Registro de despliegues» con
+  la fecha, el resultado y lo que falló y se arregló (sin secretos).
+- **AC7.** F7-01 y F7-03 a F7-07 se cumplen y quedan registradas.
+
+### Orden de commits
+
+1. `docs:` F7 en las especificaciones, el plan y `CLAUDE.md`.
+2. `build:` `deploy/setup.sh`.
+3. `build:` `deploy/teardown.sh`.
+4. `ci:` `.github/workflows/cd.yml`.
+5. `docs:` README (despliegue en Google Cloud).
+6. Después, un commit por cada corrección que haga falta en la ejecución, y el del «Registro de despliegues».
+
+### Puntos críticos de la revisión
+
+Los permisos mínimos de las cuentas de servicio y la restricción de la federación al repositorio; que ningún secreto
+sale del script; la idempotencia de `setup.sh`; que `deploy` no empieza si `verify` falla; que nada factura sin parar
+salvo Cloud SQL y el worker pool.
