@@ -175,7 +175,6 @@ async def trigger_que_falla(session_factory: async_sessionmaker[AsyncSession], d
             await s.commit()
 
 
-@pytest.mark.xfail(strict=True, reason="el bucle del worker todavía no caduca reservas")
 async def test_el_worker_envia_avisos_y_caduca_reservas_en_el_mismo_bucle(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -211,7 +210,6 @@ async def test_el_worker_envia_avisos_y_caduca_reservas_en_el_mismo_bucle(
     assert [aviso.delivery_id for aviso in notificador.recibidas] == [depositada]
 
 
-@pytest.mark.xfail(strict=True, reason="el bucle del worker todavía no caduca reservas")
 @pytest.mark.parametrize(
     ("disparo", "error"),
     [("BEFORE DELETE ON outbox_events", ERROR_OUTBOX), ("BEFORE UPDATE ON deliveries", ERROR_CADUCIDAD)],

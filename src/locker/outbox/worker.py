@@ -1,6 +1,7 @@
-# Worker del outbox: un proceso aparte, con el mismo código que la API, que envía los avisos pendientes.
+# Worker del outbox: un proceso aparte, con el mismo código que la API, que envía los avisos pendientes y, desde F6,
+# caduca las reservas vencidas (conserva el nombre histórico).
 # Se arranca con `python -m locker.outbox.worker` (o `make worker`) y se para con Ctrl-C (SIGINT) o SIGTERM.
-# Aquí se cablea el proceso: configuración, logs, engine, sesiones, repositorios, notificador y servicio.
+# Aquí se cablea el proceso: configuración, logs, engine, sesiones, repositorios, notificador y servicios.
 import asyncio
 import contextlib
 import logging
@@ -11,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from locker.core.config import Settings, get_settings
 from locker.core.database import create_engine, create_session_factory
 from locker.core.logging import configure_logging
+from locker.deliveries.expiration import ExpirationService
 from locker.deliveries.repository import SqlDeliveryRepository
+from locker.lockers.repository import SqlLockerRepository
 from locker.outbox.notifier import LogNotifier, Notifier
 from locker.outbox.repository import SqlOutboxRepository
 from locker.outbox.service import OutboxService
@@ -32,8 +35,13 @@ async def process_one(session_factory: async_sessionmaker[AsyncSession], notifie
 
 
 async def expire_one(session_factory: async_sessionmaker[AsyncSession]) -> bool:
-    """Una pasada de la caducidad: caduca la siguiente reserva vencida con una sesión nueva."""
-    raise NotImplementedError
+    """
+    Una pasada de la caducidad: caduca la siguiente reserva vencida con una sesión nueva, que se cierra al terminar.
+    Devuelve lo que devuelve expire_next: False si no había ninguna reserva vencida
+    """
+    async with session_factory() as session:
+        service = ExpirationService(session, SqlDeliveryRepository(session), SqlLockerRepository(session))
+        return await service.expire_next()
 
 
 async def pause(stop: asyncio.Event, seconds: float) -> None:
@@ -50,22 +58,29 @@ async def run(
     session_factory: async_sessionmaker[AsyncSession], notifier: Notifier, settings: Settings, stop: asyncio.Event
 ) -> None:
     """
-    Bucle del worker (§7.10), hasta que se active stop. Si había un evento, va a por el siguiente sin esperar; si
-    no había ninguno, hace una pausa de OUTBOX_POLL_INTERVAL_SECONDS. La parada no interrumpe el evento en curso:
+    Bucle del worker (§7.10), hasta que se active stop. En cada vuelta hace dos tareas: una pasada del outbox (envía
+    un aviso) y una de caducidad (caduca una reserva vencida). Si alguna tenía trabajo, vuelve a empezar sin esperar;
+    si ninguna lo tenía, hace una pausa de OUTBOX_POLL_INTERVAL_SECONDS. La parada no interrumpe la vuelta en curso:
     se mira al empezar cada vuelta, y corta la pausa si llega durante ella.
     No conoce las señales ni el proceso: recibe todo lo que necesita, y así se prueba sin lanzar procesos
     """
     while not stop.is_set():
-        # Un error inesperado (la base de datos no responde, el esquema aún no está migrado...) se registra y se
-        # trata como una vuelta sin eventos: tras la pausa se vuelve a intentar. El worker no muere por él.
-        # Los fallos al enviar un aviso no llegan aquí: process_next los apunta en el evento
+        # Cada tarea va en su propio try: un error inesperado (la base de datos no responde, el esquema aún no está
+        # migrado...) se registra y se trata como una pasada sin trabajo, sin impedir la otra tarea. El worker no
+        # muere por él. Los fallos al enviar un aviso no llegan aquí: process_next los apunta en el evento
         try:
             processed = await process_one(session_factory, notifier, settings)
         except Exception:
-            logger.exception("Error inesperado al procesar el outbox: se reintenta tras la pausa")
+            logger.exception("Error inesperado al procesar el outbox: se reintenta en la siguiente vuelta")
             processed = False
 
-        if not processed:
+        try:
+            expired = await expire_one(session_factory)
+        except Exception:
+            logger.exception("Error inesperado al caducar reservas: se reintenta en la siguiente vuelta")
+            expired = False
+
+        if not (processed or expired):
             await pause(stop, settings.outbox_poll_interval_seconds)
 
 
