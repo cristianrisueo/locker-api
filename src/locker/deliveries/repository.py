@@ -40,6 +40,13 @@ class PickedUpDelivery(NamedTuple):
     locker_id: uuid.UUID
 
 
+class ExpiredDelivery(NamedTuple):
+    """Una reserva recién caducada y la taquilla que ocupaba, que el servicio libera a continuación."""
+
+    delivery_id: uuid.UUID
+    locker_id: uuid.UUID
+
+
 class DeliveryNotice(NamedTuple):
     """Lo mínimo para avisar al residente de una entrega: a quién, en qué taquilla y en qué edificio."""
 
@@ -66,6 +73,9 @@ class DeliveryRepository(Protocol):
 
     # Lee el destinatario, la etiqueta de la taquilla y el nombre del edificio de la entrega. None si no existe
     async def get_notice(self, delivery_id: uuid.UUID) -> DeliveryNotice | None: ...
+
+    # Pasa una reserva PENDING vencida, que no tenga otra transacción, a EXPIRED. None si no hay ninguna
+    async def expire_due(self) -> ExpiredDelivery | None: ...
 
 
 class SqlDeliveryRepository:
@@ -231,3 +241,7 @@ class SqlDeliveryRepository:
         return (
             None if row is None else DeliveryNotice(recipient=row.recipient, locker_label=row.label, building_name=row.name)
         )
+
+    async def expire_due(self) -> ExpiredDelivery | None:
+        """Caduca la reserva vencida más antigua que no tenga otra transacción (§7.13)."""
+        raise NotImplementedError

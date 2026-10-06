@@ -22,6 +22,9 @@ from testcontainers.community.postgres import PostgresContainer
 
 from locker.core.config import ApiKey, DatabaseSettings, Settings, get_settings
 from locker.core.database import Base, create_engine, create_session_factory, get_session
+from locker.deliveries.expiration import ExpirationService
+from locker.deliveries.repository import SqlDeliveryRepository
+from locker.lockers.repository import SqlLockerRepository
 from locker.main import app  # importar la app registra todos los modelos en Base.metadata
 from locker.outbox.worker import process_one
 from tests.integration.notificador_falso import NotificadorFalso
@@ -377,3 +380,33 @@ def depositar(
         return entregas
 
     return lanzar
+
+
+async def vencer(session: AsyncSession, delivery_id: uuid.UUID | str) -> None:
+    """
+    Deja vencido el plazo de una entrega, escribiendo expires_at en la fila: así los tests de caducidad no esperan
+    a que pase el plazo de verdad. Confirma el cambio, para que lo vean las sesiones de las pasadas del worker
+    """
+    consulta = text("UPDATE deliveries SET expires_at = now() - interval '1 minute' WHERE id = :id")
+    await session.execute(consulta, {"id": delivery_id})
+    await session.commit()
+
+
+class Caducar(Protocol):
+    """Una pasada de la caducidad: await caducar() caduca la siguiente reserva vencida y devuelve lo que expire_next."""
+
+    async def __call__(self) -> bool: ...
+
+
+@pytest.fixture
+def caducar(session_factory: async_sessionmaker[AsyncSession]) -> Caducar:
+    """
+    Llama a expire_next como lo hace el worker: una sesión nueva en cada pasada y los repositorios de PostgreSQL.
+    Dos llamadas a la vez son dos workers distintos, cada uno con su conexión
+    """
+
+    async def una_pasada() -> bool:
+        async with session_factory() as s:
+            return await ExpirationService(s, SqlDeliveryRepository(s), SqlLockerRepository(s)).expire_next()
+
+    return una_pasada
