@@ -77,6 +77,11 @@ class Settings(DatabaseSettings):
     outbox_backoff_base_seconds: float = 2
     outbox_poll_interval_seconds: float = 1
 
+    @property
+    def reservation_ttl_seconds(self) -> int:
+        """Plazo de una reserva antes de caducar, en segundos (F6)."""
+        raise NotImplementedError
+
     @field_validator("api_keys")
     @classmethod
     def keys_are_unique(cls, api_keys: list[ApiKey]) -> list[ApiKey]:
