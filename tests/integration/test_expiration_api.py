@@ -46,7 +46,6 @@ async def estado_en_bd(session: AsyncSession) -> tuple[str, str, int]:
     return fila.status, fila.locker_status, fila.eventos
 
 
-@pytest.mark.xfail(strict=True, reason="EXPIRED todavía no es un estado de la API")
 async def test_consultar_una_entrega_caducada_devuelve_expired(
     client: AsyncClient, caducada: dict[str, Any], cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -57,7 +56,6 @@ async def test_consultar_una_entrega_caducada_devuelve_expired(
     assert respuesta.json() == {**caducada, "status": "EXPIRED"}
 
 
-@pytest.mark.xfail(strict=True, reason="EXPIRED todavía no es un estado de la API")
 async def test_depositar_una_entrega_caducada_devuelve_409(
     session: AsyncSession, client: AsyncClient, caducada: dict[str, Any], cabeceras_transportista: dict[str, str]
 ) -> None:
@@ -73,7 +71,6 @@ async def test_depositar_una_entrega_caducada_devuelve_409(
     assert await estado_en_bd(session) == ("EXPIRED", "FREE", 0)
 
 
-@pytest.mark.xfail(strict=True, reason="EXPIRED todavía no es un estado de la API")
 async def test_recoger_una_entrega_caducada_devuelve_409(
     session: AsyncSession, client: AsyncClient, caducada: dict[str, Any]
 ) -> None:

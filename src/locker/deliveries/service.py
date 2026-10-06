@@ -109,8 +109,9 @@ class DeliveryService:
             if current is None:
                 raise DeliveryNotFoundError(delivery_id)
 
-            # Ya recogida -> 409. Si no, ya estaba DEPOSITED (un reintento): se devuelve tal cual, sin otro evento
-            if current.status == "PICKED_UP":
+            # Ya estaba DEPOSITED (un reintento): se devuelve tal cual, sin otro evento. Cualquier otro estado
+            # (recogida o caducada) -> 409
+            if current.status != "DEPOSITED":
                 raise InvalidStateError
             return current
 
