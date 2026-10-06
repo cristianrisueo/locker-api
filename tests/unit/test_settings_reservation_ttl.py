@@ -18,7 +18,6 @@ def crear_settings() -> Settings:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="RESERVATION_TTL_SECONDS todavía no existe")
 def test_el_plazo_de_la_reserva_es_de_30_minutos_por_defecto(monkeypatch: pytest.MonkeyPatch) -> None:
     """«[F6-01]» Sin la variable, una reserva caduca a los 1800 segundos (30 minutos, A6)."""
     monkeypatch.delenv("RESERVATION_TTL_SECONDS", raising=False)
@@ -26,7 +25,6 @@ def test_el_plazo_de_la_reserva_es_de_30_minutos_por_defecto(monkeypatch: pytest
     assert crear_settings().reservation_ttl_seconds == 1800
 
 
-@pytest.mark.xfail(strict=True, reason="RESERVATION_TTL_SECONDS todavía no existe")
 def test_el_plazo_de_la_reserva_se_lee_del_entorno(monkeypatch: pytest.MonkeyPatch) -> None:
     """«[F6-01]» Un entero mayor que 0 en RESERVATION_TTL_SECONDS se acepta tal cual."""
     monkeypatch.setenv("RESERVATION_TTL_SECONDS", "60")
@@ -34,7 +32,6 @@ def test_el_plazo_de_la_reserva_se_lee_del_entorno(monkeypatch: pytest.MonkeyPat
     assert crear_settings().reservation_ttl_seconds == 60
 
 
-@pytest.mark.xfail(strict=True, reason="RESERVATION_TTL_SECONDS todavía no existe")
 @pytest.mark.parametrize("valor", ["0", "-1", "-1800"], ids=["cero", "menos-uno", "negativo"])
 def test_un_plazo_de_reserva_cero_o_negativo_no_arranca(monkeypatch: pytest.MonkeyPatch, valor: str) -> None:
     """
