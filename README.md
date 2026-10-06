@@ -401,3 +401,21 @@ Borra Cloud SQL (con sus datos), el servicio, el worker pool, el job y los secre
 - La API es pública y solo la protegen las claves de API. Como no hay límite de intentos al recoger (A1), el código de recogida es adivinable por fuerza bruta si se conoce el `id` de la entrega, un UUID (A27).
 - La infraestructura se prepara con scripts de bash, no de forma declarativa: no detectan cambios hechos a mano en la consola (A28).
 - Las claves no se rotan: hacerlo exige volver a ejecutar el script (tras borrar el secreto) y redesplegar (A29).
+
+### Registro de despliegues
+
+Una fila por despliegue real: qué se lanzó, cómo terminó y qué falló por el camino. Sin secretos (las claves están en Secret Manager).
+
+| Fecha      | Etiqueta      | Resultado | URL pública de la API                          | Qué falló y cómo se arregló |
+| ---------- | ------------- | --------- | ---------------------------------------------- | --------------------------- |
+| 2026-10-06 | `v0.1.0-gcp1` | Verde a la primera (`verify` 45 s, `deploy` 2 min 25 s) | <https://locker-api-sjqtezncha-ew.a.run.app> | Nada en el pipeline. En `setup.sh`, el primer permiso de `locker-runtime` falló porque IAM aún no veía la cuenta recién creada; el reintento de 10 s lo resolvió, como estaba previsto. En local, el `gcloud` de Homebrew no cargaba `worker-pools deploy/update/delete` por falta de `grpc` (solución arriba, en «Preparación») |
+
+Comprobaciones de F7 en ese despliegue (`docs/plan_fases.md` §11):
+
+- **F7-01**: `setup.sh` de cero, sin errores. Una segunda ejecución solo dijo «ya existe» en cada paso, y una foto del proyecto antes y después (etiquetas de las políticas IAM, versiones de los secretos, configuración de Cloud SQL, federación, presupuesto y APIs) salió idéntica.
+- **F7-02**: pendiente: `workflow_dispatch` solo funciona cuando `cd.yml` esté en `main`.
+- **F7-03**: `curl` a `/health` de la URL pública: `200 {"status":"ok"}` con `X-Request-ID`.
+- **F7-04**: flujo completo contra la URL pública. El operador crea un edificio y dos taquillas `M`, SEUR reserva con `Idempotency-Key` (repetirla devuelve la misma respuesta) y deposita. El aviso sale en Cloud Logging, en el log del worker pool `locker-worker`, con su `event_id`. El residente recoge con el código calculado en local con `pickup_code.derive` y el secreto leído de Secret Manager (`200 PICKED_UP`), y la taquilla vuelve a quedar libre.
+- **F7-05**: la etiqueta `v0.1.0-gcp1` lanzó el CD, que terminó en verde, smoke incluido.
+- **F7-06**: `deploy` tiene `needs: verify`, y en la ejecución empezó (14:37:50 UTC) después de que `verify` terminara (14:37:47 UTC).
+- **F7-07**: pendiente. Por decisión del desarrollador, el despliegue sigue encendido tras las comprobaciones; se cumplirá al ejecutar `deploy/teardown.sh --unlink-billing`.
