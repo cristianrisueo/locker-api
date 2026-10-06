@@ -38,7 +38,7 @@ ejercicio de aprendizaje. De ahí dos reglas que mandan sobre todo lo demás:
 - **Lo importante es poder explicarlo.** Cada decisión de §15 tiene su motivo, y se defiende en la entrevista.
 
 Objetivo de tiempo: unos dos días de trabajo. El núcleo son las fases F0 a F5 (`docs/plan_fases.md`); F6 (caducidad de
-reservas) se añade después.
+reservas) y F7 (despliegue en Google Cloud) se añaden después.
 
 ### 1.1 Qué debe demostrar (requisitos de la oferta)
 
@@ -49,7 +49,7 @@ reservas) se añade después.
 | 3   | Asincronía, eventos, segundo plano y alta concurrencia                      | `asyncio` en todo; outbox y worker (§7.10); reserva concurrente (§7.5)      |
 | 4   | Integraciones y contratos: versionado, idempotencia, alta disponibilidad    | `/v1` (§8.5); `Idempotency-Key` (§7.5); dos réplicas de la API (§13)        |
 | 5   | Cultura de testing: unitarios, integración y E2E                            | §14 y casos de cada fase                                                    |
-| 6   | Git, GitHub y CI/CD                                                         | Una rama y una PR por fase; CI en GitHub Actions. **Sin CD** (supuesto A9)  |
+| 6   | Git, GitHub y CI/CD                                                         | Una rama y una PR por fase; CI y CD en GitHub Actions, el CD hacia Google Cloud (F7, §13.5) |
 | 7   | Desarrollo asistido por IA con criterio                                     | Especificaciones + plan + tests en rojo primero + revisión de cada fase     |
 
 ---
@@ -67,6 +67,7 @@ reservas) se añade después.
 - Autenticación por clave de API con roles (operador, transportista).
 - Logs en JSON con identificador de petición.
 - Entorno local en contenedores con dos réplicas de la API y un worker; tests unitarios, de integración y E2E; CI.
+- Despliegue efímero en Google Cloud, con un pipeline de CD (F7, §13.5).
 
 ### 2.2 Fuera (a propósito)
 
@@ -76,7 +77,8 @@ reservas) se añade después.
 | Tabla de eventos fallidos (DLQ), columna `status` en el outbox | Un evento muerto se marca con `next_attempt_at` nulo                                  |
 | Envío real de correos o SMS, webhooks al transportista        | No demuestra nada que no demuestre el log; el notificador es sustituible              |
 | Evento de recogida o de reserva                               | Nadie los consume                                                                     |
-| Despliegue en producción (CD), proxy, HTTPS                   | Fuera de plazo; el PDF explica cómo se haría                                          |
+| Proxy propio                                                  | Fuera de plazo; el PDF explica cómo se haría. En Google Cloud, Cloud Run ya da el HTTPS |
+| Infraestructura como código (Terraform), entornos múltiples, dominio propio | No demuestran nada nuevo para la candidatura; la preparación se documenta con scripts |
 | JWT, usuarios, contraseñas, cuenta de residente               | La clave de API cubre la integración máquina a máquina                                |
 | Límite de intentos al recoger                                 | Bloquear tiene costes (bloqueo malicioso) y exige diseño de desbloqueo (supuesto A1)  |
 | Listados, paginación, borrar o modificar edificios y taquillas, cancelar reservas | Ninguno demuestra nada nuevo                                       |
@@ -99,7 +101,7 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A6  | Una reserva que no se deposita caduca a los 30 minutos (F6); el transportista no conoce el plazo | El plazo (`expires_at`) no se expone en la API: el transportista descubre la caducidad al consultar y ver `EXPIRED` |
 | A7  | Las claves de API están en la configuración                                        | Sin revocación individual ni rotación sin reiniciar                                            |
 | A8  | El nombre del transportista distingue mayúsculas (`SEUR` ≠ `seur`)                 | Se compara tal cual                                                                            |
-| A9  | No hay despliegue en producción                                                    | De CI/CD solo hay CI; el PDF lo argumenta                                                      |
+| A9  | El despliegue en Google Cloud es efímero y de demostración: no es un entorno de producción | Se enciende para una prueba o una entrevista y se borra. Presupuesto máximo de 5 € (§13.5) |
 | A10 | En reservar, «sin taquilla» se comprueba antes que «paquete duplicado»             | Si el paquete ya tiene reserva y no quedan taquillas, la respuesta es `NO_LOCKER_AVAILABLE`    |
 | A11 | Los reintentos del aviso toleran una caída de unos 30 segundos (2 + 4 + 8 + 16 s)  | Pasado ese tiempo el evento queda muerto                                                       |
 | A12 | Las marcas de tiempo son las de la base de datos (`now()`)                         | Los tests no dependen del reloj de Python                                                      |
@@ -108,7 +110,7 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A15 | Dos réplicas en una misma máquina no son alta disponibilidad real                  | Prueban que el diseño no depende de un proceso concreto                                        |
 | A16 | `recipient` es texto libre, sin validar su formato                                 | No hay «mis entregas» por residente                                                            |
 | A17 | La instalación inicial no admite `country` en `buildings`                          | Se añade en F3 con una migración con datos, a propósito (§5.8)                                 |
-| A18 | La API no se despliega y las claves son de desarrollo                              | Los valores de `.env.example` no son secretos reales                                           |
+| A18 | Las claves y secretos del despliegue son aleatorios y viven en Secret Manager; los de `.env.example` siguen siendo de desarrollo | Los valores de `.env.example` no son secretos reales y nunca se usan en Google Cloud |
 | A19 | Las rutas inexistentes (404) y los métodos no permitidos (405) devuelven el JSON por defecto de FastAPI (`{"detail": ...}`); un error interno no controlado (500) devuelve el texto plano `Internal Server Error`, sin `X-Request-ID` | No están en el catálogo (§8.3); el contrato de `/v1` solo cubre las operaciones definidas. El traceback de un 500 se registra con `request_id` nulo, así que no se puede asociar a una petición |
 | A20 | Una reserva puede recibir `NO_LOCKER_AVAILABLE` aunque haya una taquilla que va a quedar libre: `SKIP LOCKED` salta las taquillas que otra reserva en curso tiene bloqueadas | Si otra reserva retiene la única taquilla libre de esa talla y después se deshace (por ejemplo, con `DUPLICATE_PACKAGE`), esta recibe el `409` aunque la taquilla vuelva a estar libre. Complementa a A10. El cliente puede reintentar; desde F3 es seguro con la misma `Idempotency-Key`, porque una reserva fallida no la guarda (I8) |
 | A21 | Un error de la propia base de datos al construir el aviso deja inutilizable la transacción del worker | El fallo no se puede apuntar: el evento no suma intentos, se reintenta en cada pausa y nunca llega a muerto. Es improbable (solo hay lecturas); un `SAVEPOINT` alrededor de construir y enviar lo evitaría |
@@ -116,6 +118,10 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | A23 | El TTL de la reserva es único por despliegue (`RESERVATION_TTL_SECONDS`), no por transportista ni por edificio | Un transportista o un edificio que necesite otro plazo no puede tenerlo |
 | A24 | Un cliente con una lista cerrada de estados debe tolerar valores desconocidos: `EXPIRED` es un valor nuevo en `/v1` | Añadir un valor a un enum se trata como cambio compatible (§8.5); un cliente que no lo tolere falla al ver `EXPIRED` |
 | A25 | Caducar no avisa a nadie (no hay evento)                                           | Ni el transportista ni el residente reciben aviso; la caducidad solo deja una línea de log      |
+| A26 | Cloud SQL usa la instancia compartida más barata (`db-f1-micro`)                   | Sin alta disponibilidad ni cobertura de SLA                                                    |
+| A27 | La API desplegada es pública, protegida solo por las claves de API                 | Con A1, el código de recogida es adivinable por fuerza bruta si se conoce el `id` de la entrega (un UUID) |
+| A28 | La infraestructura se prepara con scripts de bash, no de forma declarativa         | Los scripts no detectan los cambios hechos a mano en la consola de Google Cloud                |
+| A29 | Las claves generadas en el despliegue no se rotan                                  | Rotarlas exige volver a ejecutar el script y redesplegar                                       |
 
 ---
 
@@ -126,7 +132,7 @@ Debilidades aceptadas. Una revisión no las reporta como defectos.
 | **Operador**        | Clave de API con rol `operator`          | Crear edificios, dar de alta taquillas, consultar capacidad                       |
 | **Transportista**   | Clave de API con rol `carrier` y nombre  | Consultar capacidad, reservar, depositar, consultar **sus** entregas              |
 | **Residente**       | Sin clave: `id` de la entrega y código   | Recoger su paquete                                                                |
-| **Worker** (sistema)| Proceso interno, sin API                 | Entregar los avisos pendientes del outbox                                         |
+| **Worker** (sistema)| Proceso interno, sin API                 | Entregar los avisos pendientes del outbox y caducar las reservas que no se depositan a tiempo |
 
 ---
 
@@ -242,7 +248,8 @@ transacción**:
 
 ### 5.8 Migraciones
 
-Una migración por tabla, con mensaje en castellano. Todas con `downgrade`.
+Una migración por tabla (salvo las que cambian una tabla existente: `country` y la caducidad), con mensaje en castellano.
+Todas con `downgrade`.
 
 | Orden | Migración                                  | Fase |
 | ----- | ------------------------------------------ | ---- |
@@ -461,6 +468,9 @@ Cuerpo `{"code": "483920"}` (exactamente seis dígitos; si no, `422`). En una tr
 ### 7.8 Consultar — `GET /v1/deliveries/{delivery_id}` (transportista dueño)
 
 Responde `200` con la entrega. No existe o es de otro transportista → `404 NOT_FOUND`.
+
+Una entrega `EXPIRED` también se devuelve con `200` y `status: EXPIRED`: así descubre el transportista que su reserva
+caducó (A25).
 
 ### 7.9 Código de recogida
 
@@ -702,6 +712,22 @@ entrega (F6). Un cliente con una lista cerrada de estados debe tolerar valores d
 Un monolito modular con **dos procesos** del mismo código: la API (varias réplicas, sin estado en memoria) y el worker.
 No hay broker, proxy ni servicios aparte.
 
+**Despliegue en Google Cloud (F7, §13.5).** Las mismas piezas, con la misma imagen: la API es un servicio de Cloud Run
+(de 0 a 2 instancias, con HTTPS de Cloud Run), el worker es un *worker pool* de Cloud Run (1 instancia), las migraciones
+son un *job* de Cloud Run que se ejecuta antes de desplegar, y PostgreSQL es una instancia de Cloud SQL a la que los tres
+llegan por el socket de Cloud SQL. Los secretos viven en Secret Manager y la imagen en Artifact Registry. GitHub Actions
+despliega con una identidad federada, sin claves de cuenta de servicio.
+
+```
+  GitHub Actions (CD, etiqueta v*) ──federación de identidad──▶ Google Cloud (locker-api-cristian, europe-west1)
+        │ imagen (SHA del commit)
+        ▼
+  Artifact Registry ──▶ job locker-migrate (alembic upgrade head) ──┐
+                   ├──▶ servicio locker-api (Cloud Run, HTTPS) ─────┼──socket──▶ Cloud SQL locker-db (PostgreSQL 18)
+                   └──▶ worker pool locker-worker ──────────────────┘
+                                 ▲ secretos (Secret Manager): API_KEYS, PICKUP_CODE_SECRET, DATABASE_URL
+```
+
 ### 9.1 Capas
 
 `router` (HTTP) → `service` (lógica y transacción) → `repository` (consultas). Los `schemas` son el contrato de la API y
@@ -726,7 +752,8 @@ los `models` las tablas.
 
 ## 10. Pila tecnológica
 
-Lista **cerrada**. Añadir una dependencia no listada queda fuera de alcance en cualquier fase.
+Lista **cerrada** de dependencias de Python. Añadir una dependencia no listada queda fuera de alcance en cualquier fase.
+La fila «Despliegue» no son dependencias de Python: son las piezas externas del despliegue de F7 (§13.5).
 
 | Concepto        | Elección                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------- |
@@ -738,6 +765,7 @@ Lista **cerrada**. Añadir una dependencia no listada queda fuera de alcance en 
 | Configuración   | `pydantic-settings>=2.15.0`                                                                 |
 | Desarrollo      | `pytest>=9.1.1`, `pytest-asyncio>=1.4.0`, `pytest-cov>=7.1.0`, `httpx>=0.28.1`, `testcontainers>=4.15.0`, `ruff>=0.16.10`, `mypy>=2.4.0` |
 | Hash, HMAC, UUID, logs | Biblioteca estándar (`hashlib`, `hmac`, `secrets`, `uuid`, `logging`, `contextvars`) |
+| Despliegue      | Google Cloud (Cloud Run, Cloud SQL, Secret Manager, Artifact Registry); GitHub Actions; bash y `gcloud` (F7) |
 
 Las versiones mínimas son las de bookstore. Ninguna dependencia nueva.
 
@@ -747,8 +775,13 @@ Las versiones mínimas son las de bookstore. Ninguna dependencia nueva.
 
 ```
 locker-api/
-├── .github/workflows/ci.yml
+├── .github/workflows/
+│   ├── ci.yml
+│   └── cd.yml
 ├── .vscode/settings.json
+├── deploy/
+│   ├── setup.sh
+│   └── teardown.sh
 ├── docs/
 │   ├── especificaciones.md
 │   ├── plan_fases.md
@@ -813,6 +846,9 @@ locker-api/
 | `idempotency/`                | Modelo y repositorio de claves; `fingerprint.py` (huella del cuerpo)              |
 | `outbox/`                     | Modelo y repositorio de eventos; `events.py`, `notifier.py`, `service.py`, `worker.py`. Desde F6, `worker.py` ejecuta también la caducidad (conserva el nombre histórico) |
 | `migrations/`                 | Alembic; `env.py` usa `DatabaseSettings`                                          |
+| `deploy/setup.sh`             | Prepara Google Cloud de forma idempotente: APIs, Artifact Registry, Cloud SQL, secretos, cuentas de servicio, federación de identidad, permisos y presupuesto (F7, §13.5) |
+| `deploy/teardown.sh`          | Borra lo que se factura (Cloud SQL, servicio, worker pool, job) y los secretos; con `--unlink-billing`, desvincula la facturación (F7) |
+| `.github/workflows/cd.yml`    | CD: con una etiqueta `v*` o a mano, verifica, construye la imagen, migra, despliega la API y el worker y pasa el smoke (F7) |
 
 ---
 
@@ -889,6 +925,91 @@ Idéntico al de bookstore (GitHub Actions, en push a `main` y en cada PR): `acti
 caché, `uv sync --locked`, `make check`, `git diff --exit-code` (el código ya viene formateado) y `make test`. No ejecuta
 E2E ni smoke.
 
+### 13.5 Despliegue en Google Cloud (F7)
+
+Demuestra un CD de GitHub Actions enlazado a Google Cloud, a bajo coste y de forma reproducible. El despliegue es
+**efímero** (A9): se enciende para una prueba o una entrevista y se borra. No cambia el código de la aplicación.
+
+1. **Proyecto y región.** Proyecto `locker-api-cristian` (número `953827667605`), región `europe-west1`. Los dos son
+   variables al principio de los scripts.
+2. **Cómputo**, con la misma imagen del `Dockerfile` (§13.1); solo cambia el comando:
+   - **API**: servicio de Cloud Run `locker-api`, puerto 8000, de 0 a 2 instancias, 1 vCPU y 512 MiB. Público
+     (`--allow-unauthenticated`), protegido por las claves de API de la aplicación (A27).
+   - **Worker**: *worker pool* de Cloud Run `locker-worker`, 1 instancia, 1 vCPU y 512 MiB, comando
+     `python -m locker.outbox.worker`.
+   - **Migraciones**: *job* de Cloud Run `locker-migrate`, `alembic upgrade head`. Se ejecuta antes de desplegar, nunca
+     al arrancar (§12.2).
+3. **Base de datos**: Cloud SQL `locker-db`, PostgreSQL 18, edición Enterprise, tier `db-f1-micro` (A26), 10 GB SSD,
+   sin alta disponibilidad, con IP pública y sin redes autorizadas. Cloud Run llega por el socket de Cloud SQL
+   (`--add-cloudsql-instances`), sin conector de VPC. Base `locker` y usuario `locker` con contraseña aleatoria
+   alfanumérica. La URL es
+   `postgresql+asyncpg://locker:<contraseña>@/locker?host=/cloudsql/<proyecto>:<región>:<instancia>`: asyncpg recibe el
+   directorio del socket como `host`.
+4. **Secretos** en Secret Manager (A18): `locker-api-keys` (`API_KEYS`: una clave de operador y una de transportista
+   `SEUR`, aleatorias de al menos 32 caracteres), `locker-pickup-secret` (`PICKUP_CODE_SECRET`, aleatorio de al menos 32
+   caracteres) y `locker-db-url` (`DATABASE_URL`). Los genera `setup.sh` con `openssl rand` y los guarda por la entrada
+   estándar, sin pasar por ficheros. Cloud Run los inyecta como variables de entorno (`--set-secrets`). Se ejecutan con
+   la cuenta de servicio `locker-runtime`, que solo tiene `secretmanager.secretAccessor` y `cloudsql.client`.
+5. **Imagen**: Artifact Registry, repositorio Docker `locker` en la región. La etiqueta es el SHA del commit.
+6. **Autenticación del CD**: *Workload Identity Federation*. Un pool con un proveedor OIDC de
+   `https://token.actions.githubusercontent.com`, con una `attribute-condition` que solo admite el repositorio
+   `cristianrisueo/locker-api`. GitHub Actions actúa como la cuenta de servicio `locker-deployer`, con los roles mínimos
+   para subir la imagen, ejecutar el job y desplegar el servicio y el worker pool, más `iam.serviceAccountUser` sobre
+   `locker-runtime`. No hay claves de cuenta de servicio. El repositorio de GitHub guarda solo **variables** (no
+   secretos): `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER` y `GCP_DEPLOYER_SA`.
+7. **Scripts** (`deploy/`), con `set -euo pipefail`. Antes de hacer nada comprueban que la configuración activa de
+   `gcloud` y el proyecto son los esperados:
+   - `setup.sh [--yes]`: idempotente (cada recurso se comprueba antes de crearse). Se detiene si el proyecto no tiene
+     facturación vinculada; activa solo las APIs necesarias; crea Artifact Registry, la instancia y la base de datos, los
+     secretos, las cuentas de servicio, la federación y los permisos, y un presupuesto de 5 EUR con avisos al 50, 90 y
+     100 % (si falla, avisa y sigue). Al final imprime las variables de GitHub. `--yes` evita la confirmación.
+   - `teardown.sh [--yes] [--unlink-billing]`: borra Cloud SQL, el servicio, el worker pool, el job y los secretos; con
+     `--unlink-billing`, desvincula la facturación. No borra el proyecto.
+8. **Pipeline** (`.github/workflows/cd.yml`, `name: CD`). Se lanza a mano (`workflow_dispatch`) o con el push de una
+   etiqueta `v*`; nunca en cada push a `main`. Permisos `id-token: write` y `contents: read`. Dos trabajos:
+   - `verify`: los mismos pasos que el CI (§13.4).
+   - `deploy` (`needs: verify`): se autentica con la federación, construye y publica la imagen, ejecuta el job de
+     migraciones y espera a que termine, despliega la API y el worker pool, calienta la API con un `curl` con reintentos
+     a `/health` y pasa `make smoke BASE_URLS=<url de la API>` (el smoke no necesita `.env`).
+   Usa las acciones oficiales de Google (`google-github-actions/auth` y `setup-gcloud`) con la versión fijada.
+   `workflow_dispatch` solo funciona cuando el workflow ya está en la rama principal; antes, se lanza con una etiqueta.
+9. **Seguridad**: la API es pública (A27) y no hay límite de intentos al recoger (A1). Las claves son aleatorias y nunca
+   las de `.env.example`.
+10. **Coste**: tope de 5 € con un presupuesto que avisa. Solo facturan sin parar Cloud SQL y el worker pool; la API
+    escala a 0. El README documenta el coste por pieza, cómo apagar sin borrar (el worker pool a 0 instancias y Cloud SQL
+    con la política de activación `never`/`always`) y cómo borrarlo todo.
+
+**Recursos**
+
+| Nombre                        | Tipo                                   | Configuración                                                        |
+| ----------------------------- | -------------------------------------- | -------------------------------------------------------------------- |
+| `locker`                      | Repositorio de Artifact Registry       | Docker, `europe-west1`; imágenes etiquetadas con el SHA del commit   |
+| `locker-db`                   | Instancia de Cloud SQL                 | PostgreSQL 18, Enterprise, `db-f1-micro`, 10 GB SSD, zonal, IP pública sin redes autorizadas; base y usuario `locker` |
+| `locker-api-keys`             | Secreto                                | `API_KEYS`                                                           |
+| `locker-pickup-secret`        | Secreto                                | `PICKUP_CODE_SECRET`                                                 |
+| `locker-db-url`               | Secreto                                | `DATABASE_URL`                                                       |
+| `locker-runtime`              | Cuenta de servicio                     | `secretmanager.secretAccessor` y `cloudsql.client`                   |
+| `locker-deployer`             | Cuenta de servicio                     | Roles para publicar la imagen y desplegar; `iam.serviceAccountUser` sobre `locker-runtime`; la usa GitHub Actions |
+| `locker-github` / `github`    | Pool y proveedor de identidad federada | OIDC de GitHub, solo `cristianrisueo/locker-api`                     |
+| `locker-migrate`              | Job de Cloud Run                       | `alembic upgrade head`, 1 vCPU y 512 MiB, sin reintentos             |
+| `locker-api`                  | Servicio de Cloud Run                  | Puerto 8000, de 0 a 2 instancias, 1 vCPU y 512 MiB, público          |
+| `locker-worker`               | Worker pool de Cloud Run               | `python -m locker.outbox.worker`, 1 instancia, 1 vCPU y 512 MiB      |
+| `locker-api` (presupuesto)    | Presupuesto de facturación             | 5 EUR para el proyecto, avisos al 50, 90 y 100 %                     |
+
+Los tres últimos de cómputo (job, servicio y worker pool) los crea el pipeline, no `setup.sh`. Los usan `locker-runtime`
+y los tres secretos.
+
+**Flujo del pipeline**
+
+```
+etiqueta v* (o workflow_dispatch) ─▶ verify: make check, git diff --exit-code, make test
+                                      │ (si falla, deploy no empieza)
+                                      ▼
+                                    deploy: federación ─▶ docker build y push (SHA) ─▶ job locker-migrate (y espera)
+                                            ─▶ servicio locker-api ─▶ worker pool locker-worker
+                                            ─▶ curl /health con reintentos ─▶ make smoke BASE_URLS=<url>
+```
+
 ---
 
 ## 14. Estrategia de tests
@@ -954,6 +1075,7 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | D14 | Salud                          | Un único `/health` que comprueba la base de datos                                          | `/health` y `/health/ready` (solo importa cuando algo reinicia contenedores según su salud)                           |
 | D15 | Notificador                    | `Protocol` con `LogNotifier` y un doble de test                                            | Interfaz «por si acaso» un broker (abstracción sin uso); envío real de correos (no aporta)                            |
 | D16 | Caducidad de reservas          | Columna `expires_at` y trabajo en el mismo worker con `UPDATE` condicional y `SKIP LOCKED` | Caducidad perezosa al reservar (la taquilla seguiría `BUSY` en la capacidad hasta que alguien reserve); proceso aparte (otra pieza sin necesidad); exponer `expires_at` (rompería el JSON de tests de fases cerradas) |
+| D17 | Despliegue en Google Cloud     | Combinación efímera con Cloud Run (servicio, worker pool y job de migraciones) y Cloud SQL, con CD de GitHub Actions por federación de identidad | VPS con Docker Compose y Caddy (no demuestra Google Cloud); máquina virtual gratuita `e2-micro` con todo dentro (gratis, pero menos representativa y justa de memoria); FastAPI Cloud (en beta y sin procesos en segundo plano); Railway (comodidad a cambio de menos control y coste variable); CD en cada push a `main` (gastaría presupuesto sin que lo decidas) |
 
 ---
 
@@ -965,4 +1087,5 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | 2026-10-05 | I10, A19 y §11        | Revisión de F0: contradicción detectada por Claude Code y familias sin código propio | — |
 | 2026-10-05 | A19, A20, I10 y §8.2  | Revisión de F2: el 500 es texto plano; el falso `409` por `SKIP LOCKED`; la capacidad no puede dar `403` | — |
 | 2026-10-06 | §7.7, §7.10, A21, A22 y §14.4 | Cierre del núcleo (F0 a F5): la liberación de la taquilla es condicional (I4); la espera de los reintentos es 2, 4, 8 y 16 s; dos limitaciones del worker; los tests de concurrencia deben fallar sin su protección | — |
-| 2026-10-06 | F6 (caducidad)        | Se añade la fase F6 tras cerrar el núcleo; redactada por Claude Code por encargo del desarrollador | A6, §1 y §2.2 |
+| 2026-10-06 | F6 (caducidad)        | Se añade la fase F6 tras cerrar el núcleo; redactada por Claude Code por encargo del desarrollador | A6, §1, §2.2, §4, §5.8 y §7.8 |
+| 2026-10-06 | F7 (despliegue en Google Cloud) | Se añade y ejecuta la fase F7; redactada y ejecutada por Claude Code por encargo del desarrollador | A9, A18 y §2.2 |
