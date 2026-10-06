@@ -808,3 +808,35 @@ F7 no añade tests: se comprueba ejecutando el despliegue real. Cada resultado s
 Los permisos mínimos de las cuentas de servicio y la restricción de la federación al repositorio; que ningún secreto
 sale del script; la idempotencia de `setup.sh`; que `deploy` no empieza si `verify` falla; que nada factura sin parar
 salvo Cloud SQL y el worker pool.
+
+### F7b — Dominio propio
+
+**Rama:** `fase/F7b-dominio`  ·  **Depende de:** F7 (con el despliegue encendido).
+
+Mejora pequeña de F7: la API desplegada responde también en `https://api.lockerapi.dev` (§13.5, punto 11; D18). Solo
+**añade** el mapeo de dominio: no cambia ni borra nada de lo que ya existe en Google Cloud, y no ejecuta
+`teardown.sh`.
+
+**Dentro:** `deploy/domain.sh`; el borrado del mapeo en `deploy/teardown.sh` (antes que el servicio); la verificación
+del dominio y los dos registros DNS en Vercel; el README (sección «Dominio propio»); la ejecución.
+**Fuera:** la raíz `lockerapi.dev` (queda para un futuro frontend), balanceador de carga, Firebase Hosting, Cloud
+Domains, cualquier cambio en el servicio o en los registros DNS que ya tenía el dominio.
+
+**Reglas de la ejecución**, además de las de F7: solo el proyecto `locker-api-cristian`; en `lockerapi.dev` solo se
+añaden el `TXT` de verificación en la raíz y el `CNAME` de `api` (los registros existentes de Vercel no se tocan); los
+registros solo los añade Claude Code con la CLI de Vercel con sesión iniciada, y si no, los pone el desarrollador;
+nada que pida un pago; como mucho 3 intentos por paso.
+
+**Comprobaciones**
+
+| ID     | Qué comprueba                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------- |
+| F7b-01 | `domain.sh` pasa `bash -n` y `shellcheck`, y una segunda ejecución no crea nada nuevo                                |
+| F7b-02 | `lockerapi.dev` aparece en `gcloud domains list-user-verified`                                                       |
+| F7b-03 | El `TXT` de verificación y el `CNAME` de `api` son visibles con `dig`, y los registros que ya existían siguen igual   |
+| F7b-04 | El mapeo está `Ready` con el certificado emitido, y `https://api.lockerapi.dev/health` da `200` con `X-Request-ID`    |
+| F7b-05 | `teardown.sh` borra el mapeo, si existe, antes que el servicio (revisado en el código; no se ejecuta)                 |
+| F7b-06 | Nada de lo que ya existía cambió: el servicio sirve la misma revisión, y el worker, Cloud SQL y los secretos siguen igual |
+
+**Orden de commits:** `docs:` F7b en las especificaciones y el plan; `build:` `deploy/domain.sh`; `build:` el borrado
+del mapeo en `teardown.sh`; `docs:` README («Dominio propio» y el registro de despliegues).
