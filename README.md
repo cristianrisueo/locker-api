@@ -4,7 +4,7 @@ API de taquillas para paquetería: un transportista reserva una taquilla de un e
 
 Qué hace el sistema y cómo se construye está en [`docs/especificaciones.md`](docs/especificaciones.md); el orden de construcción, por fases, en [`docs/plan_fases.md`](docs/plan_fases.md).
 
-> **Estado: F6 (núcleo completo y caducidad de reservas).** Sobre la base de F0 (errores, logs, identificador de petición, `/health`, contenedores con dos réplicas, tests y CI) hay claves de API con roles, alta de edificios (con país), alta de taquillas con etiqueta generada, consulta de capacidad y **reserva de taquilla** segura bajo concurrencia, también entre réplicas, con **`Idempotency-Key` obligatoria**: repetir una reserva devuelve la misma respuesta. `country` se añadió a `buildings` con una **migración con datos**. El **ciclo de la entrega** está completo: el transportista deposita (y se apunta el evento del aviso en la misma transacción), consulta su entrega, y el residente recoge con un **código derivado** que no se guarda. Un **worker** (proceso aparte con el mismo código) envía el aviso del depósito al residente desde el outbox, con reintentos y espera creciente; los avisos que agotan sus intentos quedan como eventos muertos y se reactivan con una sentencia SQL. El mismo worker **caduca las reservas** que no se depositan a tiempo (30 minutos por defecto): pasan a `EXPIRED` y su taquilla vuelve a quedar libre.
+> **Estado: F7 (núcleo completo, caducidad de reservas y despliegue en Google Cloud).** Sobre la base de F0 (errores, logs, identificador de petición, `/health`, contenedores con dos réplicas, tests y CI) hay claves de API con roles, alta de edificios (con país), alta de taquillas con etiqueta generada, consulta de capacidad y **reserva de taquilla** segura bajo concurrencia, también entre réplicas, con **`Idempotency-Key` obligatoria**: repetir una reserva devuelve la misma respuesta. `country` se añadió a `buildings` con una **migración con datos**. El **ciclo de la entrega** está completo: el transportista deposita (y se apunta el evento del aviso en la misma transacción), consulta su entrega, y el residente recoge con un **código derivado** que no se guarda. Un **worker** (proceso aparte con el mismo código) envía el aviso del depósito al residente desde el outbox, con reintentos y espera creciente; los avisos que agotan sus intentos quedan como eventos muertos y se reactivan con una sentencia SQL. El mismo worker **caduca las reservas** que no se depositan a tiempo (30 minutos por defecto): pasan a `EXPIRED` y su taquilla vuelve a quedar libre. El sistema se **despliega en Google Cloud** desde GitHub Actions (Cloud Run y Cloud SQL) y se borra con un script: es un despliegue efímero, de demostración.
 
 ## Stack
 
@@ -296,6 +296,108 @@ Tres niveles; cada comportamiento se prueba en el más bajo que caza su bug:
 
 Se sigue TDD: el test en rojo se sube marcado con `@pytest.mark.xfail(strict=True)` y el commit que lo arregla quita el marcador.
 
-## CI
+## CI y CD
 
 GitHub Actions (`.github/workflows/ci.yml`) ejecuta en cada push a `main` y en cada pull request: `uv sync --locked`, `make check`, `git diff --exit-code` (como `make check` formatea en vez de fallar, comprueba que el código ya venía formateado) y `make test`. No ejecuta E2E ni smoke.
+
+El CD (`.github/workflows/cd.yml`) despliega en Google Cloud. **No** corre en cada push a `main`: cada despliegue gasta presupuesto, así que se lanza a mano (pestaña *Actions*, `workflow_dispatch`) o subiendo una etiqueta `v*`. Tiene dos trabajos: `verify` repite los pasos del CI, y `deploy` (que solo empieza si `verify` pasa) construye la imagen, migra, despliega la API y el worker y pasa el smoke contra la URL pública. Detalles en la sección siguiente.
+
+## Despliegue en Google Cloud
+
+Un despliegue **efímero y de demostración** (no es producción): se enciende para una prueba o una entrevista y se borra. Las decisiones están en [`docs/especificaciones.md`](docs/especificaciones.md) §13.5.
+
+| Pieza                    | Qué es                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `locker-api`             | Servicio de Cloud Run: la API, pública y con HTTPS, de 0 a 2 instancias (1 vCPU, 512 MiB)       |
+| `locker-worker`          | *Worker pool* de Cloud Run: el worker, 1 instancia siempre encendida (1 vCPU, 512 MiB)          |
+| `locker-migrate`         | *Job* de Cloud Run: `alembic upgrade head`, que el CD ejecuta antes de desplegar                |
+| `locker-db`              | Cloud SQL, PostgreSQL 18, `db-f1-micro`, 10 GB SSD, sin alta disponibilidad. Se llega por el socket de Cloud SQL, sin redes autorizadas |
+| `locker`                 | Repositorio Docker de Artifact Registry; cada imagen se etiqueta con el SHA del commit          |
+| Secret Manager           | `locker-api-keys` (`API_KEYS`), `locker-pickup-secret` (`PICKUP_CODE_SECRET`) y `locker-db-url` (`DATABASE_URL`) |
+| `locker-runtime`         | Cuenta de servicio con la que corren los contenedores: solo lee secretos y se conecta a Cloud SQL |
+| `locker-deployer`        | Cuenta de servicio con la que despliega GitHub Actions, por federación de identidad (sin claves) |
+
+Todo vive en el proyecto `locker-api-cristian`, región `europe-west1`. La misma imagen del `Dockerfile` arranca la API, el worker y las migraciones; los contenedores reciben los secretos de Secret Manager como variables de entorno al arrancar, así que nunca pasan por GitHub.
+
+### Preparación (una vez por despliegue)
+
+Necesitas `gcloud` con una configuración `locker-api` activa que apunte al proyecto (`gcloud config configurations activate locker-api`), `gh` con sesión iniciada, y el proyecto con una cuenta de facturación **vinculada** (los scripts no la vinculan: lo decides tú).
+
+```bash
+gcloud billing projects link locker-api-cristian --billing-account=<id de tu cuenta>   # empieza a facturar
+deploy/setup.sh                  # APIs, Artifact Registry, Cloud SQL (tarda unos minutos), secretos, permisos y presupuesto
+```
+
+`setup.sh` es **idempotente**: comprueba cada recurso antes de crearlo, así que se puede repetir sin duplicar nada ni cambiar las claves. Genera las claves de API, el secreto del código de recogida y la contraseña de la base de datos con `openssl rand` y los guarda directamente en Secret Manager: no los imprime ni los escribe en ningún fichero. Al terminar imprime las cuatro **variables** del repositorio de GitHub (no son secretos) y los comandos `gh variable set` para crearlas: `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER` y `GCP_DEPLOYER_SA`.
+
+Para desplegar, sube una etiqueta (o, cuando el workflow esté en `main`, lánzalo desde la pestaña *Actions*):
+
+```bash
+git tag v0.1.0-gcp1 && git push origin v0.1.0-gcp1
+gh run watch                     # sigue la ejecución
+gcloud run services describe locker-api --project=locker-api-cristian --region=europe-west1 --format='value(status.url)'
+```
+
+Para probar a mano, las claves se leen de Secret Manager (no las pegues en ningún sitio):
+
+```bash
+gcloud secrets versions access latest --secret=locker-api-keys --project=locker-api-cristian
+```
+
+El aviso al residente (con el código de recogida, A5) sale en el log del worker, en Cloud Logging:
+
+```bash
+gcloud logging read 'jsonPayload.logger="locker.notifier"' --project=locker-api-cristian --limit=5
+```
+
+**gcloud de Homebrew en macOS.** Desplegar, cambiar o borrar un *worker pool* necesita el módulo `grpc` en el Python que usa `gcloud`. El cask de Homebrew no trae el Python propio del SDK, y si `gcloud` acaba usando otro sin `grpc`, `gcloud run worker-pools delete` no carga (`teardown.sh` lo comprueba antes de borrar nada). Solución: un Python aparte con `grpcio` solo para `gcloud`:
+
+```bash
+uv venv ~/.gcloud-python --python 3.13 && uv pip install --python ~/.gcloud-python/bin/python grpcio
+export CLOUDSDK_PYTHON=~/.gcloud-python/bin/python CLOUDSDK_PYTHON_SITEPACKAGES=1
+```
+
+En GitHub Actions no hace falta: el SDK que instala `setup-gcloud` trae su propio Python con `grpc`.
+
+### Coste
+
+Precios aproximados de `europe-west1`, en orden de magnitud (la referencia es la calculadora de Google Cloud):
+
+| Pieza                                 | Coste aproximado                                    |
+| ------------------------------------- | --------------------------------------------------- |
+| Worker pool (1 vCPU, siempre encendido) | ~1,5 € al día: es lo que más gasta                 |
+| Cloud SQL `db-f1-micro`               | ~0,3 € al día, más ~0,06 € al día por los 10 GB de disco |
+| API (Cloud Run, de 0 a 2 instancias)  | ~0 €: sin tráfico no hay instancias, y las pruebas caben en la capa gratuita |
+| Artifact Registry, Secret Manager, federación, cuentas de servicio | ~0 € (capa gratuita o sin coste)       |
+| GitHub Actions                        | 0 € (repositorio público)                           |
+
+Con todo encendido, unos **2 € al día**. El tope del despliegue es **5 €**: `setup.sh` crea un presupuesto de 5 EUR que avisa por correo al 50, 90 y 100 %. Un presupuesto avisa, **no corta** el gasto: lo que lo corta es apagar o borrar.
+
+### Apagar sin borrar
+
+Solo Cloud SQL y el worker pool facturan sin parar; la API escala a 0 sola.
+
+```bash
+# Apagar: el worker a 0 instancias y Cloud SQL parada (se sigue pagando el disco)
+gcloud run worker-pools update locker-worker --instances=0 --project=locker-api-cristian --region=europe-west1
+gcloud sql instances patch locker-db --activation-policy=never --project=locker-api-cristian
+
+# Encender otra vez
+gcloud sql instances patch locker-db --activation-policy=always --project=locker-api-cristian
+gcloud run worker-pools update locker-worker --instances=1 --project=locker-api-cristian --region=europe-west1
+```
+
+### Borrarlo todo
+
+```bash
+deploy/teardown.sh --unlink-billing
+```
+
+Borra Cloud SQL (con sus datos), el servicio, el worker pool, el job y los secretos, y con `--unlink-billing` desvincula la facturación: sin cuenta vinculada, el proyecto ya no puede facturar nada. Antes de borrar comprueba que todo lo que va a borrar es de este despliegue; si aparece algo más, para sin tocar nada. Quedan, sin coste, el repositorio de imágenes, las cuentas de servicio, la federación, el presupuesto y las APIs activadas, que `setup.sh` reutiliza. No borra el proyecto. Ojo: Cloud SQL no deja reutilizar el nombre `locker-db` hasta una semana después de borrar la instancia, así que un `setup.sh` justo después de un `teardown.sh` falla al crearla.
+
+### Limitaciones del despliegue
+
+- Es de demostración (A9), con la instancia de Cloud SQL más barata: sin alta disponibilidad ni SLA (A26).
+- La API es pública y solo la protegen las claves de API. Como no hay límite de intentos al recoger (A1), el código de recogida es adivinable por fuerza bruta si se conoce el `id` de la entrega, un UUID (A27).
+- La infraestructura se prepara con scripts de bash, no de forma declarativa: no detectan cambios hechos a mano en la consola (A28).
+- Las claves no se rotan: hacerlo exige volver a ejecutar el script (tras borrar el secreto) y redesplegar (A29).
