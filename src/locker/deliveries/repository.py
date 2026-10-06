@@ -243,5 +243,44 @@ class SqlDeliveryRepository:
         )
 
     async def expire_due(self) -> ExpiredDelivery | None:
-        """Caduca la reserva vencida más antigua que no tenga otra transacción (§7.13)."""
-        raise NotImplementedError
+        """
+        Caduca una reserva vencida en UNA sola sentencia: la busca y la pasa a EXPIRED a la vez (I4, I14).
+
+        WITH vencida AS (
+            SELECT id FROM deliveries
+            WHERE status = 'PENDING' AND expires_at <= now()
+            ORDER BY expires_at, id LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE deliveries SET status = 'EXPIRED'
+        FROM vencida
+        WHERE deliveries.id = vencida.id AND deliveries.status = 'PENDING'
+        RETURNING deliveries.id, deliveries.locker_id
+        """
+
+        # La vencida: la reserva pendiente con el plazo más antiguo (el índice parcial ix_deliveries_pending_expiry
+        # sostiene la búsqueda). FOR UPDATE la bloquea hasta el final de la transacción; SKIP LOCKED salta las que
+        # tiene bloqueadas otra transacción (otro worker, o un depósito en curso) en vez de esperarlas
+        due = (
+            select(DeliveryModel.id)
+            .where(DeliveryModel.status == "PENDING", DeliveryModel.expires_at <= func.now())
+            .order_by(DeliveryModel.expires_at, DeliveryModel.id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+            .cte("vencida")
+        )
+
+        # El UPDATE vuelve a exigir PENDING (I4): es la misma condición por la que compite depositar, y solo uno de
+        # los dos cambia la fila. Devuelve la entrega y su taquilla, que es la que hay que liberar.
+        # synchronize_session=False: no hace falta actualizar objetos en memoria, la fila se lee del RETURNING
+        stmt = (
+            update(DeliveryModel)
+            .where(DeliveryModel.id == due.c.id, DeliveryModel.status == "PENDING")
+            .values(status="EXPIRED")
+            .returning(DeliveryModel.id, DeliveryModel.locker_id)
+            .execution_options(synchronize_session=False)
+        )
+
+        # Una fila si ha caducado una reserva; ninguna si no había ninguna vencida libre
+        row = (await self._session.execute(stmt)).one_or_none()
+        return None if row is None else ExpiredDelivery(delivery_id=row.id, locker_id=row.locker_id)

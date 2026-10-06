@@ -31,7 +31,6 @@ async def tablas(session: AsyncSession) -> tuple[list[dict[str, Any]], list[dict
     return resultado
 
 
-@pytest.mark.xfail(strict=True, reason="expire_next todavía no existe")
 async def test_caducar_pasa_la_reserva_vencida_a_expired_y_libera_su_taquilla(
     session: AsyncSession,
     crear_edificio: CrearEdificio,
@@ -59,7 +58,6 @@ async def test_caducar_pasa_la_reserva_vencida_a_expired_y_libera_su_taquilla(
     ]
 
 
-@pytest.mark.xfail(strict=True, reason="expire_next todavía no existe")
 async def test_caducar_y_liberar_la_taquilla_van_en_la_misma_transaccion(
     session: AsyncSession,
     crear_edificio: CrearEdificio,
@@ -84,7 +82,6 @@ async def test_caducar_y_liberar_la_taquilla_van_en_la_misma_transaccion(
     assert await estados(session) == {entrega: ("PENDING", "FREE")}
 
 
-@pytest.mark.xfail(strict=True, reason="expire_next todavía no existe")
 async def test_caducar_no_toca_lo_que_no_ha_vencido_ni_lo_depositado_o_recogido(
     session: AsyncSession,
     client: AsyncClient,
@@ -116,7 +113,6 @@ async def test_caducar_no_toca_lo_que_no_ha_vencido_ni_lo_depositado_o_recogido(
     assert await tablas(session) == antes
 
 
-@pytest.mark.xfail(strict=True, reason="expire_next todavía no existe")
 async def test_tras_caducar_el_paquete_y_la_taquilla_se_pueden_reservar_otra_vez(
     session: AsyncSession,
     client: AsyncClient,
