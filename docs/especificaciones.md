@@ -1108,3 +1108,4 @@ Elecciones deliberadas, para que nadie las «corrija» después. Son la base del
 | 2026-10-06 | F6 (caducidad)        | Se añade la fase F6 tras cerrar el núcleo; redactada por Claude Code por encargo del desarrollador | A6, §1, §2.2, §4, §5.8 y §7.8 |
 | 2026-10-06 | F7 (despliegue en Google Cloud) | Se añade y ejecuta la fase F7; redactada y ejecutada por Claude Code por encargo del desarrollador | A9, A18 y §2.2 |
 | 2026-10-06 | F7b (dominio propio)  | La API se publica también en `api.lockerapi.dev` con el *domain mapping* de Cloud Run; redactada y ejecutada por Claude Code por encargo del desarrollador | §2.2 |
+| 2026-10-07 | F7c (verificación del despliegue) | Se verifica el despliegue de extremo a extremo y se deja la evidencia | — |
