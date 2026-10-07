@@ -840,3 +840,20 @@ nada que pida un pago; como mucho 3 intentos por paso.
 
 **Orden de commits:** `docs:` F7b en las especificaciones y el plan; `build:` `deploy/domain.sh`; `build:` el borrado
 del mapeo en `teardown.sh`; `docs:` README («Dominio propio» y el registro de despliegues).
+
+### F7c — Verificación del despliegue
+
+**Rama:** `fase/F7c-verificacion`  ·  **Depende de:** F7 y F7b (con el despliegue encendido).
+
+Verificación de extremo a extremo de la API ya desplegada, contra `https://api.lockerapi.dev`, con la evidencia escrita
+en `docs/evidencias_despliegue.md`: 45 verificaciones `V-01` a `V-45` (disponibilidad y HTTPS, seguridad, edificios y
+capacidad, reserva e idempotencia, depositar y el aviso en Cloud Logging, consulta, recogida, concurrencia real, la
+suite E2E sin base de datos, la caducidad tras 31 minutos y un Edificio Demo sin reservas).
+
+**Reglas:** solo lectura sobre la infraestructura (ni `deploy`, ni `update`, ni `delete`, ni scripts de `deploy/`); las
+claves y el secreto se leen de Secret Manager solo a variables de entorno y nunca se escriben; los códigos de recogida
+se calculan en local y no aparecen en la evidencia; unos cientos de peticiones como mucho; no cambia `src/`, `tests/`
+ni los workflows. Un fallo real de la API se documenta y se avisa, no se arregla.
+
+**Orden de commits:** `docs:` F7c en el plan y en las especificaciones; `docs:` la evidencia; `docs:` la fila del
+registro de despliegues del README.
